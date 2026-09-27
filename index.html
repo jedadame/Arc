@@ -84,8 +84,8 @@ function Card({ children, style, glow }) {
 function Chip({ children, color = C.yellow, size = 12 }) {
   return <span style={{ display:"inline-flex", alignItems:"center", padding:"3px 9px", borderRadius:99, fontSize:size, fontWeight:700, background:color+"20", color, border:`1px solid ${color}30` }}>{children}</span>;
 }
-function SL({ children }) {
-  return <Label style={{ marginBottom: 10, marginTop: 22 }}>{children}</Label>;
+function SL({ children, style }) {
+  return <Label style={{ marginBottom: 10, marginTop: 22, ...style }}>{children}</Label>;
 }
 function FilterChip({ active, onClick, children }) {
   return (
@@ -337,17 +337,18 @@ function JournalFullEditor({ journalText, setJournalText, journalPhoto, setJourn
 
 // ─── HOME TAB ────────────────────────────────────────────────────────────────
 function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journalEntries, addEntry, addWeight }) {
-  const [tasks, setTasks] = useState([]);
+  const draft = loadDraft();
+  const [tasks, setTasks] = useState(draft?.tasks ?? []);
   const [newTask, setNewTask] = useState("");
-  const [mood, setMood] = useState(5);
-  const [journalText, setJournalText] = useState("");
-  const [habitsDone, setHabitsDone] = useState({});
+  const [mood, setMood] = useState(draft?.mood ?? 5);
+  const [journalText, setJournalText] = useState(draft?.journalText ?? "");
+  const [habitsDone, setHabitsDone] = useState(draft?.habitsDone ?? {});
   const [saved, setSaved] = useState(false);
-  const [weightInput, setWeightInput] = useState("");
-  const [progressPhoto, setProgressPhoto] = useState(null);
-  const [journalPhoto, setJournalPhoto] = useState(null);
+  const [weightInput, setWeightInput] = useState(draft?.weightInput ?? "");
+  const [progressPhoto, setProgressPhoto] = useState(draft?.progressPhoto ?? null);
+  const [journalPhoto, setJournalPhoto] = useState(draft?.journalPhoto ?? null);
   const [video, setVideo] = useState(null);
-  const [musicTag, setMusicTag] = useState("");
+  const [musicTag, setMusicTag] = useState(draft?.musicTag ?? "");
   const [expanded, setExpanded] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -396,6 +397,20 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
   const stopRec = () => { if (mediaRef.current && recording) { mediaRef.current.stop(); setRecording(false); clearInterval(timerRef.current); } };
   useEffect(() => () => clearInterval(timerRef.current), []);
 
+  // Persist today's in-progress state (tasks, mood, draft journal text, weight
+  // input, habit checkmarks, progress/journal photos) on every change, so it
+  // survives closing the app or a refresh. Audio and video attachments aren't
+  // included — they can't be safely stored this way — so those still reset
+  // until Save. Tomorrow this draft is ignored (see loadDraft) and a fresh one
+  // starts, since tasks and mood are meant to be for today only.
+  useEffect(() => {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        day: TODAY.toDateString(), tasks, mood, journalText, habitsDone, weightInput, progressPhoto, journalPhoto, musicTag,
+      }));
+    } catch {}
+  }, [tasks, mood, journalText, habitsDone, weightInput, progressPhoto, journalPhoto, musicTag]);
+
   // Builds a snapshot of today (mood, journal text, which habits/tasks were
   // done, whether photo/audio were attached) and hands it up to the shared
   // journalEntries state so the Journal and You tabs see it immediately.
@@ -423,7 +438,7 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
     <div className="view-in" style={{ padding: "0 16px 28px" }}>
       <div style={{ paddingTop: 24, marginBottom: 16 }}>
         <div style={{ fontSize: 11, color: C.textDim, fontWeight: 600, letterSpacing: "0.1em" }}>{DAY_NAMES[TODAY.getDay()].toUpperCase()} · {MONTH_NAMES[TODAY.getMonth()]} {TODAY.getDate()}</div>
-        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Today's <span style={{ color: C.yellow }}>Focus.</span></div>
+        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Today's <span style={{ color: C.yellow }}>Journal.</span></div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20 }}>
@@ -634,7 +649,7 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
     <div className="view-in" style={{ padding: "0 16px 28px" }}>
       <div style={{ paddingTop: 24, marginBottom: 16 }}>
         <div style={{ fontSize: 11, color: C.textDim, fontWeight: 600, letterSpacing: "0.1em" }}>{entries.length} ENTRIES</div>
-        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Your <span style={{ color: C.yellow }}>Record.</span></div>
+        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Your <span style={{ color: C.yellow }}>Entries.</span></div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
@@ -779,7 +794,9 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
   const [manageGoals, setManageGoals] = useState(false);
   const [newGoalText, setNewGoalText] = useState("");
 
-  const year = TODAY.getFullYear(); const month = TODAY.getMonth();
+  const [calMonthOffset, setCalMonthOffset] = useState(0);
+  const calAnchor = new Date(TODAY.getFullYear(), TODAY.getMonth() + calMonthOffset, 1);
+  const year = calAnchor.getFullYear(); const month = calAnchor.getMonth();
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const scoreColor = (s) => s === "great" ? C.green : s === "ok" ? C.yellow : s === "bad" ? C.orange : C.bgRaised;
@@ -851,7 +868,13 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
         ))}
       </Card>
 
-      <SL>{MONTH_NAMES[month]} {year}</SL>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 22 }}>
+        <SL style={{ marginBottom: 0 }}>{MONTH_NAMES[month]} {year}</SL>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => { setCalMonthOffset(o => o - 1); setSelectedDay(null); }} style={{ width: 26, height: 26, borderRadius: 8, background: C.bgCard, border: `1px solid ${C.borderMid}`, color: C.text, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+          <button onClick={() => { setCalMonthOffset(o => Math.min(0, o + 1)); setSelectedDay(null); }} disabled={calMonthOffset >= 0} style={{ width: 26, height: 26, borderRadius: 8, background: C.bgCard, border: `1px solid ${C.borderMid}`, color: C.text, fontSize: 13, cursor: calMonthOffset >= 0 ? "default" : "pointer", opacity: calMonthOffset >= 0 ? 0.3 : 1, display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+        </div>
+      </div>
       <Card>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
           {[["great", C.green], ["ok", C.yellow], ["bad", C.orange], ["miss", C.bgRaised]].map(([s, c]) => (
@@ -1009,6 +1032,7 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "discipline-app-v1";
+const DRAFT_KEY = "discipline-app-draft-v1";
 function loadSaved() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -1017,6 +1041,20 @@ function loadSaved() {
     p.journalEntries = (p.journalEntries || []).map(e => ({ ...e, date: new Date(e.date) }));
     p.weightHistory = (p.weightHistory || []).map(w => ({ ...w, date: new Date(w.date) }));
     return p;
+  } catch { return null; }
+}
+// Today's in-progress Home tab state (tasks, mood, draft journal text, weight
+// input, habit checkmarks) used to live only in memory and vanished the moment
+// the app was closed. This loads it back from local storage — but only if it
+// was written today; a draft from a previous day is stale and ignored, so a
+// new day still starts with a clean slate.
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (d.day !== TODAY.toDateString()) return null;
+    return d;
   } catch { return null; }
 }
 
@@ -1050,8 +1088,8 @@ function App() {
   const deleteEntry = (id) => setJournalEntries(es => es.filter(e => e.id !== id));
 
   const TABS = [
-    { key: "home", icon: "⚡", label: "Home" },
-    { key: "journal", icon: "📓", label: "Journal" },
+    { key: "home", icon: "⚡", label: "Journal" },
+    { key: "journal", icon: "📓", label: "Entries" },
     { key: "you", icon: "◎", label: "You" },
   ];
 
