@@ -116,7 +116,7 @@ function useReorder(itemCount, onReorder) {
     if (!drag) return;
     const handleMove = (e) => {
       const info = dragRef.current;
-      if (!info) return;
+      if (!info || e.pointerId !== info.pointerId) return;
       const totalOffset = e.clientY - info.startY;
       const shift = Math.round(totalOffset / info.rowH);
       const remainder = totalOffset - shift * info.rowH;
@@ -127,7 +127,11 @@ function useReorder(itemCount, onReorder) {
       }
       setDrag({ index: info.current, offset: remainder });
     };
-    const handleUp = () => { dragRef.current = null; setDrag(null); document.body.style.userSelect = ""; };
+    const handleUp = (e) => {
+      const info = dragRef.current;
+      if (info && info.handleEl) { try { info.handleEl.releasePointerCapture(info.pointerId); } catch {} }
+      dragRef.current = null; setDrag(null); document.body.style.userSelect = "";
+    };
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
     window.addEventListener("pointercancel", handleUp);
@@ -140,9 +144,15 @@ function useReorder(itemCount, onReorder) {
 
   const startDrag = (index) => (e) => {
     e.preventDefault(); e.stopPropagation();
+    const handleEl = e.currentTarget;
+    // Lock all subsequent move/up events to this handle, regardless of what
+    // ends up visually underneath the finger (an input, another row, etc.)
+    // as rows shuffle around during the drag — without this, the browser
+    // can silently hand the gesture off and the drag just stops working.
+    try { handleEl.setPointerCapture(e.pointerId); } catch {}
     const el = containerRef.current && containerRef.current.children[index];
     const rowH = el ? el.getBoundingClientRect().height : 50;
-    dragRef.current = { origIndex: index, current: index, startY: e.clientY, rowH };
+    dragRef.current = { origIndex: index, current: index, startY: e.clientY, rowH, handleEl, pointerId: e.pointerId };
     setDrag({ index, offset: 0 });
     document.body.style.userSelect = "none";
   };
@@ -1023,9 +1033,9 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
         <div ref={habitReorder.containerRef}>
         {habits.map((h, i) => (
           <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < habits.length - 1 ? `1px solid ${C.border}` : "none", ...habitReorder.rowStyle(i) }}>
+            <DragHandle onPointerDown={habitReorder.startDrag(i)} />
             {manageHabits ? (
               <>
-                <DragHandle onPointerDown={habitReorder.startDrag(i)} />
                 <input value={h.icon} onChange={e => updateHabit(h.id, "icon", e.target.value)} style={{ ...miniInputStyle, width: 40, textAlign: "center", padding: "6px 2px" }} />
                 <input value={h.name} onChange={e => updateHabit(h.id, "name", e.target.value)} style={{ ...miniInputStyle, flex: 1 }} />
                 <button onClick={() => deleteHabit(h.id)} style={{ background: "transparent", border: "none", color: C.red, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
@@ -1060,13 +1070,12 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
       <div style={{ fontSize: 11, color: QUARTER_DAYS_LEFT <= 14 ? C.red : C.textDim, marginBottom: 10 }}>{QUARTER_DAYS_LEFT} days left in Q{CURRENT_QUARTER}</div>
       <div ref={goalReorder.containerRef}>
       {goals.map((g, i) => (
-        <div key={g.id} style={{ background: C.bgCard, border: `1px solid ${g.done ? g.color + "55" : C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, ...goalReorder.rowStyle(i) }}>
+        <div key={g.id} style={{ background: C.bgCard, border: `1px solid ${g.done ? g.color + "55" : C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, display: "flex", alignItems: "flex-start", gap: 8, ...goalReorder.rowStyle(i) }}>
+          <DragHandle onPointerDown={goalReorder.startDrag(i)} />
+          <div style={{ flex: 1, minWidth: 0 }}>
           {manageGoals ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <DragHandle onPointerDown={goalReorder.startDrag(i)} />
-                <input value={g.text} onChange={e => updateGoal(g.id, "text", e.target.value)} style={{ ...miniInputStyle, flex: 1 }} />
-              </div>
+              <input value={g.text} onChange={e => updateGoal(g.id, "text", e.target.value)} style={{ ...miniInputStyle }} />
               <button onClick={() => deleteGoal(g.id)} style={{ alignSelf: "flex-end", background: "transparent", border: "none", color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
             </div>
           ) : (
@@ -1081,6 +1090,7 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
               <div style={{ fontSize: 10, color: g.done ? C.textDim : (QUARTER_DAYS_LEFT <= 14 ? C.red : C.textDim), marginTop: 2 }}>{g.done ? "Completed" : `${QUARTER_DAYS_LEFT} days left in Q${CURRENT_QUARTER}`}</div>
             </>
           )}
+          </div>
         </div>
       ))}
       </div>
