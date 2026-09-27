@@ -23,6 +23,10 @@
   #root { height: 100%; }
   input, textarea, select, button { box-sizing: border-box; }
   select { -webkit-appearance: none; appearance: none; }
+  /* iOS Safari auto-zooms the page when a focused input's font-size is under
+     16px. The !important here is needed to win over the smaller inline font
+     sizes on individual inputs without having to touch every one of them. */
+  input, textarea, select { font-size: 16px !important; }
 
   /* Satisfying, springy tap feedback — used everywhere something is checked or pressed */
   .goal-check, .check-box { transition: transform .16s cubic-bezier(.34,1.56,.64,1), background .15s ease, border-color .15s ease; }
@@ -103,10 +107,12 @@ function Toggle({ on, onClick }) {
 }
 
 // ─── Drag-to-reorder ──────────────────────────────────────────────────────────
-// Touch/mouse-friendly manual reordering (native HTML5 drag-and-drop is
-// unreliable on mobile). Attach `containerRef` to the list's wrapper,
-// `startDrag(index)` to a handle's onPointerDown, and `rowStyle(index)` to
-// each row's style. `onReorder(from, to)` should splice the item over.
+// Touch/mouse-friendly manual reordering (native HTML5 drag-and-drop, and even
+// Pointer Events, are unreliable inside iOS home-screen web apps — plain touch
+// events are the one thing that's consistently solid there). Attach
+// `containerRef` to the list's wrapper, `startDrag(index)` to a handle's
+// onTouchStart/onMouseDown, and `rowStyle(index)` to each row's style.
+// `onReorder(from, to)` should splice the item over.
 function useReorder(itemCount, onReorder) {
   const containerRef = useRef(null);
   const dragRef = useRef(null); // { origIndex, current, startY, rowH }
@@ -114,10 +120,12 @@ function useReorder(itemCount, onReorder) {
 
   useEffect(() => {
     if (!drag) return;
+    const getY = (e) => (e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY);
     const handleMove = (e) => {
       const info = dragRef.current;
-      if (!info || e.pointerId !== info.pointerId) return;
-      const totalOffset = e.clientY - info.startY;
+      if (!info) return;
+      if (e.cancelable) e.preventDefault(); // stop the page from scrolling mid-drag
+      const totalOffset = getY(e) - info.startY;
       const shift = Math.round(totalOffset / info.rowH);
       const remainder = totalOffset - shift * info.rowH;
       const targetIndex = Math.min(itemCount - 1, Math.max(0, info.origIndex + shift));
@@ -127,32 +135,28 @@ function useReorder(itemCount, onReorder) {
       }
       setDrag({ index: info.current, offset: remainder });
     };
-    const handleUp = (e) => {
-      const info = dragRef.current;
-      if (info && info.handleEl) { try { info.handleEl.releasePointerCapture(info.pointerId); } catch {} }
-      dragRef.current = null; setDrag(null); document.body.style.userSelect = "";
-    };
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    window.addEventListener("pointercancel", handleUp);
+    const handleUp = () => { dragRef.current = null; setDrag(null); document.body.style.userSelect = ""; };
+    window.addEventListener("touchmove", handleMove, { passive: false });
+    window.addEventListener("touchend", handleUp);
+    window.addEventListener("touchcancel", handleUp);
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
     return () => {
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-      window.removeEventListener("pointercancel", handleUp);
+      window.removeEventListener("touchmove", handleMove);
+      window.removeEventListener("touchend", handleUp);
+      window.removeEventListener("touchcancel", handleUp);
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
     };
   }, [drag, itemCount, onReorder]);
 
   const startDrag = (index) => (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const handleEl = e.currentTarget;
-    // Lock all subsequent move/up events to this handle, regardless of what
-    // ends up visually underneath the finger (an input, another row, etc.)
-    // as rows shuffle around during the drag — without this, the browser
-    // can silently hand the gesture off and the drag just stops working.
-    try { handleEl.setPointerCapture(e.pointerId); } catch {}
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    const startY = e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY;
     const el = containerRef.current && containerRef.current.children[index];
     const rowH = el ? el.getBoundingClientRect().height : 50;
-    dragRef.current = { origIndex: index, current: index, startY: e.clientY, rowH, handleEl, pointerId: e.pointerId };
+    dragRef.current = { origIndex: index, current: index, startY, rowH };
     setDrag({ index, offset: 0 });
     document.body.style.userSelect = "none";
   };
@@ -165,9 +169,10 @@ function useReorder(itemCount, onReorder) {
 }
 // Splice helper for the onReorder callback a list passes to useReorder.
 const reorderArray = (arr, from, to) => { const c = [...arr]; const [m] = c.splice(from, 1); c.splice(to, 0, m); return c; };
-function DragHandle({ onPointerDown }) {
+function DragHandle({ onDragStart }) {
   return (
-    <span onPointerDown={onPointerDown} onClick={e => e.stopPropagation()} style={{ touchAction: "none", cursor: "grab", color: C.textDim, fontSize: 16, padding: "4px 2px", flexShrink: 0, lineHeight: 1, userSelect: "none" }}>⠿</span>
+    <span onTouchStart={onDragStart} onMouseDown={onDragStart} onClick={e => e.stopPropagation()}
+      style={{ touchAction: "none", cursor: "grab", color: C.textDim, fontSize: 18, padding: "8px 6px", margin: "-8px -2px", flexShrink: 0, lineHeight: 1, userSelect: "none" }}>⠿</span>
   );
 }
 
@@ -559,7 +564,7 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
         <div ref={taskReorder.containerRef}>
         {tasks.map((t, i) => (
           <div key={t.id} className="row-tap" onClick={() => toggleTask(t.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 6px", margin: "0 -6px", borderBottom: i < tasks.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", ...taskReorder.rowStyle(i) }}>
-            <DragHandle onPointerDown={taskReorder.startDrag(i)} />
+            <DragHandle onDragStart={taskReorder.startDrag(i)} />
             <div className="check-box" style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${t.done ? C.yellow : C.borderMid}`, background: t.done ? C.yellow : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
               {t.done && <span style={{ fontSize: 11, color: "#000", fontWeight: 900, lineHeight: 1 }}>✓</span>}
             </div>
@@ -1033,7 +1038,7 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
         <div ref={habitReorder.containerRef}>
         {habits.map((h, i) => (
           <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < habits.length - 1 ? `1px solid ${C.border}` : "none", ...habitReorder.rowStyle(i) }}>
-            <DragHandle onPointerDown={habitReorder.startDrag(i)} />
+            <DragHandle onDragStart={habitReorder.startDrag(i)} />
             {manageHabits ? (
               <>
                 <input value={h.icon} onChange={e => updateHabit(h.id, "icon", e.target.value)} style={{ ...miniInputStyle, width: 40, textAlign: "center", padding: "6px 2px" }} />
@@ -1071,7 +1076,7 @@ function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHist
       <div ref={goalReorder.containerRef}>
       {goals.map((g, i) => (
         <div key={g.id} style={{ background: C.bgCard, border: `1px solid ${g.done ? g.color + "55" : C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, display: "flex", alignItems: "flex-start", gap: 8, ...goalReorder.rowStyle(i) }}>
-          <DragHandle onPointerDown={goalReorder.startDrag(i)} />
+          <DragHandle onDragStart={goalReorder.startDrag(i)} />
           <div style={{ flex: 1, minWidth: 0 }}>
           {manageGoals ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
