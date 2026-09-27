@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Discipline" />
+<meta name="theme-color" content="#080808" />
+<link rel="manifest" href="manifest.json" />
+<title>Discipline Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  :root { box-sizing: border-box; }
+  html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body { margin: 0; background: #080808; height: 100%; -webkit-tap-highlight-color: transparent; }
+  #root { height: 100%; }
+  input, textarea, select, button { box-sizing: border-box; }
+  select { -webkit-appearance: none; appearance: none; }
+
+  /* Satisfying, springy tap feedback — used everywhere something is checked or pressed */
+  .goal-check, .check-box { transition: transform .16s cubic-bezier(.34,1.56,.64,1), background .15s ease, border-color .15s ease; }
+  .goal-check:active, .check-box:active { transform: scale(0.8); }
+
+  button { transition: transform .12s cubic-bezier(.34,1.56,.64,1), opacity .12s ease; }
+  button:active:not(:disabled) { transform: scale(0.94); }
+
+  /* Rows you tap to toggle (tasks, habits, journal cards) get a gentle press + settle */
+  .row-tap { transition: transform .12s cubic-bezier(.34,1.56,.64,1), background-color .15s ease; border-radius: 10px; }
+  .row-tap:active { transform: scale(0.985); background-color: rgba(255,255,255,0.03); }
+
+  /* Soft fade-in when a tab or view mounts, so switches feel intentional, not instant */
+  @keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .view-in { animation: viewIn .3s cubic-bezier(.16,1,.3,1); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  bg: "#080808", bgCard: "#111", bgRaised: "#181818",
+  border: "#1E1E1E", borderMid: "#2A2A2A",
+  yellow: "#F5C800", yellowDim: "#A88900", yellowGlow: "rgba(245,200,0,0.10)", yellowGlowStrong: "rgba(245,200,0,0.18)",
+  text: "#F0F0F0", textMid: "#888", textDim: "#444",
+  green: "#3DBA6F", red: "#E05555", blue: "#4A90D9", purple: "#9B6DFF", orange: "#FF8C42",
+};
+
+const TODAY = new Date();
+const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtS = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const RANGE_OPTIONS = [7, 14, 30, 60, 90];
+
+const selectStyle = { background: C.bgRaised, color: C.text, border: `1px solid ${C.border}`, borderRadius: 9, padding: "6px 10px", fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", outline: "none" };
+const manageBtnStyle = (active) => ({ background: active ? C.yellow : C.bgCard, color: active ? "#000" : C.textMid, border: `1px solid ${active ? C.yellow : C.borderMid}`, borderRadius: 9, padding: "5px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit" });
+const miniInputStyle = { background: C.bgRaised, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 13, fontFamily: "inherit", outline: "none" };
+const iconBtnStyle = { width: 34, height: 34, borderRadius: 10, background: C.bgCard, border: `1px solid ${C.borderMid}`, color: C.text, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+
+// ─── Shared UI ──────────────────────────────────────────────────────────────
+function Bar({ pct, color = C.yellow, h = 6 }) {
+  return (
+    <div style={{ height: h, borderRadius: 99, background: C.bgRaised, overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: color, borderRadius: 99, transition: "width 0.7s cubic-bezier(.4,0,.2,1)" }} />
+    </div>
+  );
+}
+function Label({ children, style }) {
+  return <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", color: C.textDim, textTransform: "uppercase", ...style }}>{children}</div>;
+}
+function Card({ children, style, glow }) {
+  return (
+    <div style={{ background: C.bgCard, border: `1px solid ${glow ? C.yellow+"44" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 10, boxShadow: glow ? `0 0 24px ${C.yellowGlow}` : "0 2px 10px rgba(0,0,0,0.28)", ...style }}>{children}</div>
+  );
+}
+function Chip({ children, color = C.yellow, size = 12 }) {
+  return <span style={{ display:"inline-flex", alignItems:"center", padding:"3px 9px", borderRadius:99, fontSize:size, fontWeight:700, background:color+"20", color, border:`1px solid ${color}30` }}>{children}</span>;
+}
+function SL({ children }) {
+  return <Label style={{ marginBottom: 10, marginTop: 22 }}>{children}</Label>;
+}
+function FilterChip({ active, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{ padding: "6px 12px", borderRadius: 9, background: active ? C.yellow : C.bgCard, color: active ? "#000" : C.textMid, border: `1px solid ${active ? C.yellow : C.border}`, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, whiteSpace: "nowrap" }}>
+      {children}
+    </button>
+  );
+}
+function Toggle({ on, onClick }) {
+  return (
+    <button onClick={onClick} style={{ width: 44, height: 26, borderRadius: 99, background: on ? C.yellow : C.bgRaised, border: `1px solid ${on ? C.yellow : C.borderMid}`, position: "relative", cursor: "pointer", flexShrink: 0, padding: 0 }}>
+      <div style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 20, height: 20, borderRadius: "50%", background: on ? "#000" : C.textDim, transition: "left 0.15s" }} />
+    </button>
+  );
+}
+
+// ─── Data ─────────────────────────────────────────────────────────────────────
+const TOPICS = [
+  "What would you tell your 15-year-old self?",
+  "Why is discipline more important than motivation?",
+  "Describe your perfect day in 60 seconds.",
+  "What's one belief you've changed your mind on?",
+  "How do you define success right now?",
+  "What fear are you currently facing?",
+  "Why do most people never reach their potential?",
+  "What's the hardest thing you've ever done?",
+];
+
+const INIT_HABITS = [];
+const INIT_GOALS = [];
+const GOAL_COLORS = [C.yellow, C.purple, C.blue, C.green, C.orange, C.red];
+
+// Goals are simple SMART goals, not numeric — they're all pegged to the current
+// quarter automatically. No per-goal deadline picker; just "days left this quarter."
+const CURRENT_QUARTER = Math.floor(TODAY.getMonth() / 3) + 1;
+const QUARTER_END = new Date(TODAY.getFullYear(), Math.floor(TODAY.getMonth() / 3) * 3 + 3, 0);
+const QUARTER_DAYS_LEFT = Math.max(0, Math.ceil((QUARTER_END - TODAY) / 86400000));
+
+const dateKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+const hasEntryOn = (entries, d) => entries.some(e => sameDay(e.date, d));
+
+// Day-score calendar (monthly heatmap + mood trend) — derived live from saved
+// journal entries instead of a separate mock dataset that could drift out of sync.
+const buildCalData = (entries) => {
+  const data = {};
+  entries.forEach(e => {
+    const total = e.habitsTotal || 0, hit = e.habitsDone || 0;
+    const score = total === 0 ? (e.mood >= 8 ? "great" : e.mood >= 6 ? "ok" : "bad")
+      : hit === total ? "great" : hit >= total / 2 ? "ok" : hit > 0 ? "bad" : "miss";
+    data[dateKey(e.date)] = { mood: e.mood, score, summary: total ? `${hit}/${total} habits` : "Logged", habitsHit: hit };
+  });
+  return data;
+};
+
+// Per-habit day-by-day completion, derived from each entry's habit snapshot
+// at the time it was saved — replaces the old mutable HABIT_HISTORY object.
+const buildHabitDays = (habitId, entries, days = 30) => {
+  const map = {};
+  entries.forEach(e => { const rec = (e.habitsSnapshot || []).find(h => h.id === habitId); if (rec) map[dateKey(e.date)] = rec.done; });
+  return Array.from({ length: days }, (_, i) => { const d = new Date(TODAY); d.setDate(TODAY.getDate() - (days - 1 - i)); return { date: d, done: !!map[dateKey(d)] }; });
+};
+
+const currentStreak = (entries) => {
+  let streak = 0, d = new Date(TODAY);
+  while (entries.some(e => sameDay(e.date, d))) { streak++; d.setDate(d.getDate() - 1); }
+  return streak;
+};
+
+// ─── Interactive line chart with hover tooltip ───────────────────────────────
+function InteractiveChart({ data, valueKey, color, height = 90, unit = "" }) {
+  const [hover, setHover] = useState(null);
+  if (!data || data.length === 0) {
+    return (
+      <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: C.textDim, fontWeight: 600 }}>
+        No data yet
+      </div>
+    );
+  }
+  const values = data.map(d => d[valueKey]);
+  const max = Math.max(...values), min = Math.min(...values);
+  const range = max - min || 1;
+  const w = 100, h = height;
+  const pts = data.map((d, i) => ({ x: (i / Math.max(data.length - 1, 1)) * w, y: h - ((d[valueKey] - min) / range) * (h * 0.75) - h * 0.12, raw: d }));
+  const path = pts.map((p, i) => i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`).join(" ");
+  const gradId = `grad-${color.replace("#", "")}-${valueKey}`;
+
+  const handleMove = (clientX, rect) => {
+    const relX = ((clientX - rect.left) / rect.width) * w;
+    let idx = 0, best = Infinity;
+    pts.forEach((p, i) => { const d = Math.abs(p.x - relX); if (d < best) { best = d; idx = i; } });
+    setHover(idx);
+  };
+  const hp = hover !== null ? pts[hover] : null;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height, display: "block" }} preserveAspectRatio="none"
+        onMouseMove={(e) => handleMove(e.clientX, e.currentTarget.getBoundingClientRect())}
+        onMouseLeave={() => setHover(null)}
+        onTouchStart={(e) => e.touches[0] && handleMove(e.touches[0].clientX, e.currentTarget.getBoundingClientRect())}
+        onTouchMove={(e) => e.touches[0] && handleMove(e.touches[0].clientX, e.currentTarget.getBoundingClientRect())}
+        onTouchEnd={() => setHover(null)}>
+        <defs><linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.3" /><stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient></defs>
+        <path d={`${path} L${pts[pts.length - 1].x},${h} L${pts[0].x},${h} Z`} fill={`url(#${gradId})`} />
+        <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        {hp && <line x1={hp.x} y1="0" x2={hp.x} y2={h} stroke={color} strokeWidth="0.5" strokeDasharray="2,2" opacity="0.5" />}
+        {pts.map((p, i) => (hover === i || (hover === null && i === pts.length - 1)) &&
+          <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={color} />
+        )}
+      </svg>
+      {hp && (
+        <div style={{ position: "absolute", left: `${Math.min(Math.max(hp.x, 14), 86)}%`, top: 0, transform: "translateX(-50%)", background: C.bgRaised, border: `1px solid ${color}66`, borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 700, color: C.text, whiteSpace: "nowrap", pointerEvents: "none" }}>
+          {hp.raw[valueKey]}{unit} · {MONTH_NAMES[hp.raw.date.getMonth()]} {hp.raw.date.getDate()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Reflect card: mood → journal text (compact) → progress photo → voice ───
+// Everything here is always visible and never expands. Tapping the expand
+// icon on the journal text opens the barebones full-screen writer below.
+function ReflectCard({ mood, setMood, journalText, setJournalText, progressPhoto, setProgressPhoto, handleProgressPhoto, settings,
+  onExpand, recording, audioBlob, audioTimer, audioDuration, audioMode, setAudioMode, topic, setTopic, rerollTopic,
+  startRec, stopRec, resetAudio, weightInput, setWeightInput }) {
+  const moodEmoji = mood >= 8 ? "🔥" : mood >= 6 ? "😐" : "💀";
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+        <span style={{ fontSize: 32 }}>{moodEmoji}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Mood</span>
+            <span style={{ fontSize: 16, fontWeight: 900, color: mood >= 8 ? C.yellow : mood >= 6 ? C.textMid : C.red }}>{mood}/10</span>
+          </div>
+          <input type="range" min={1} max={10} value={mood} onChange={e => setMood(+e.target.value)} style={{ width: "100%", accentColor: C.yellow, cursor: "pointer" }} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textMid, width: 84, flexShrink: 0 }}>Bodyweight</span>
+        <input type="number" inputMode="decimal" value={weightInput} onChange={e => setWeightInput(e.target.value)} placeholder="optional, lbs" style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <Label style={{ marginBottom: 0 }}>Journal</Label>
+          <button onClick={onExpand} style={{ ...iconBtnStyle, width: 28, height: 28, fontSize: 13, borderRadius: 8 }}>⤢</button>
+        </div>
+        <textarea value={journalText} onChange={e => setJournalText(e.target.value)} onFocus={onExpand} readOnly placeholder="What happened today? Don't filter it." rows={6} style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.borderMid}`, borderRadius: 10, padding: "14px", color: C.text, fontSize: 14, fontFamily: "inherit", lineHeight: 1.7, outline: "none", resize: "none", boxSizing: "border-box", cursor: "pointer" }} />
+        <div style={{ fontSize: 11, color: C.textDim, textAlign: "right", marginTop: 4 }}>{journalText.split(/\s+/).filter(Boolean).length} words</div>
+      </div>
+
+      {settings.photo && (
+        <div style={{ marginTop: 16 }}>
+          <Label style={{ marginBottom: 8 }}>Progress Photo</Label>
+          {progressPhoto ? (
+            <div style={{ position: "relative" }}>
+              <img src={progressPhoto} alt="Progress" style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 12, display: "block" }} />
+              <button onClick={() => setProgressPhoto(null)} style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.6)", border: "none", color: "#fff", borderRadius: 8, width: 28, height: 28, fontSize: 16, cursor: "pointer" }}>×</button>
+            </div>
+          ) : (
+            <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "20px 0", borderRadius: 12, border: `1px dashed ${C.borderMid}`, cursor: "pointer" }}>
+              <input type="file" accept="image/*" capture="environment" onChange={handleProgressPhoto} style={{ display: "none" }} />
+              <span style={{ fontSize: 24 }}>📸</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Add today's progress photo</span>
+            </label>
+          )}
+        </div>
+      )}
+
+      {settings.voice && (
+        <div style={{ marginTop: 16 }}>
+          <Label style={{ marginBottom: 8 }}>Voice note</Label>
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {[["day", "🎙 Day recap"], ["impromptu", "🎤 60s drill"]].map(([m, l]) => (
+              <button key={m} onClick={() => setAudioMode(m)} style={{ flex: 1, padding: "8px 0", borderRadius: 10, background: audioMode === m ? C.yellow : C.bgRaised, color: audioMode === m ? "#000" : C.textMid, border: `1px solid ${audioMode === m ? C.yellow : C.border}`, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+            ))}
+          </div>
+          {audioMode === "impromptu" && (
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: C.bgRaised, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+              <div style={{ flex: 1, fontSize: 12, color: C.yellow, fontWeight: 600, lineHeight: 1.5 }}>"{topic}"</div>
+              <button onClick={rerollTopic} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 8px", color: C.textDim, fontSize: 11, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>↻</button>
+            </div>
+          )}
+          {!audioBlob ? (
+            <div style={{ textAlign: "center" }}>
+              {recording && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: C.red, fontVariantNumeric: "tabular-nums" }}>{fmtS(audioTimer)}</div>
+                  {audioMode === "impromptu" && <div style={{ marginTop: 4 }}><Bar pct={(audioTimer / 60) * 100} color={C.red} h={3} /></div>}
+                </div>
+              )}
+              <button onClick={recording ? stopRec : startRec} style={{ width: 56, height: 56, borderRadius: "50%", background: recording ? C.red : C.yellow, border: "none", cursor: "pointer", fontSize: 22, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{recording ? "⏹" : "🎤"}</button>
+              <div style={{ fontSize: 11, color: C.textDim, marginTop: 8 }}>{recording ? "Tap to stop" : "Tap to record"}</div>
+            </div>
+          ) : (
+            <div style={{ background: C.bgRaised, borderRadius: 10, padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green + "22", border: `1px solid ${C.green}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>✓</div>
+                <div><div style={{ fontSize: 12, fontWeight: 700, color: C.green }}>Recorded</div><div style={{ fontSize: 10, color: C.textDim }}>{fmtS(audioDuration)} · {audioMode === "impromptu" ? "Impromptu" : "Day recap"}</div></div>
+                <button onClick={resetAudio} style={{ marginLeft: "auto", background: "transparent", border: "none", color: C.textDim, fontSize: 14, cursor: "pointer" }}>↩</button>
+              </div>
+              <audio src={URL.createObjectURL(audioBlob)} controls style={{ width: "100%", height: 30 }} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Full-screen journal writer — barebones, Notes-app style. Just text. ─────
+// Attachments (photo/video/song) live behind the ⋯ menu, not fixed sections;
+// when present they show as small removable chips above the text.
+function JournalFullEditor({ journalText, setJournalText, journalPhoto, setJournalPhoto, video, removeVideo, musicTag, setMusicTag }) {
+  const hasAttachments = journalPhoto || video || musicTag;
+  return (
+    <div>
+      {hasAttachments && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          {journalPhoto && (
+            <div style={{ position: "relative" }}>
+              <img src={journalPhoto} alt="Journal" style={{ width: 60, height: 60, borderRadius: 10, objectFit: "cover", display: "block" }} />
+              <button onClick={() => setJournalPhoto(null)} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.75)", border: "none", color: "#fff", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>×</button>
+            </div>
+          )}
+          {video && (
+            <div style={{ position: "relative" }}>
+              <video src={video} style={{ width: 60, height: 60, borderRadius: 10, objectFit: "cover", display: "block", background: "#000" }} />
+              <button onClick={removeVideo} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.75)", border: "none", color: "#fff", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>×</button>
+            </div>
+          )}
+          {musicTag && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: C.bgRaised, borderRadius: 20, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+              🎵 {musicTag}
+              <button onClick={() => setMusicTag("")} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 14, cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+          )}
+        </div>
+      )}
+      <textarea value={journalText} onChange={e => setJournalText(e.target.value)} placeholder="What happened today? Don't filter it." rows={16} autoFocus
+        style={{ width: "100%", background: "transparent", border: "none", color: C.text, fontSize: 16, fontFamily: "inherit", lineHeight: 1.8, outline: "none", resize: "none" }} />
+    </div>
+  );
+}
+
+// ─── HOME TAB ────────────────────────────────────────────────────────────────
+function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journalEntries, addEntry, addWeight }) {
+  const [tasks, setTasks] = useState([]);
+  const [newTask, setNewTask] = useState("");
+  const [mood, setMood] = useState(5);
+  const [journalText, setJournalText] = useState("");
+  const [habitsDone, setHabitsDone] = useState({});
+  const [saved, setSaved] = useState(false);
+  const [weightInput, setWeightInput] = useState("");
+  const [progressPhoto, setProgressPhoto] = useState(null);
+  const [journalPhoto, setJournalPhoto] = useState(null);
+  const [video, setVideo] = useState(null);
+  const [musicTag, setMusicTag] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  // Audio log
+  const [recording, setRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioTimer, setAudioTimer] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [audioMode, setAudioMode] = useState("day");
+  const [topic, setTopic] = useState(TOPICS[0]);
+  const mediaRef = useRef(null); const timerRef = useRef(null); const chunksRef = useRef([]);
+  const journalPhotoInputRef = useRef(null); const journalVideoInputRef = useRef(null);
+
+  const done = tasks.filter(t => t.done).length;
+  const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+  const toggleTask = (id) => setTasks(ts => ts.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  const addTask = () => { if (!newTask.trim()) return; setTasks(ts => [...ts, { id: Date.now(), text: newTask, done: false, carry: false }]); setNewTask(""); };
+  const toggleHabitDone = (id) => setHabitsDone(s => ({ ...s, [id]: !s[id] }));
+
+  const weekAnchor = new Date(TODAY); weekAnchor.setDate(TODAY.getDate() + weekOffset * 7);
+  const anchorDow = weekAnchor.getDay();
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekAnchor); d.setDate(weekAnchor.getDate() - anchorDow + i);
+    return { label: DAY_NAMES[i].slice(0, 1), date: d.getDate(), fullDate: d, today: sameDay(d, TODAY), hasEntry: hasEntryOn(journalEntries, d) };
+  });
+
+  const handleProgressPhoto = (e) => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = () => setProgressPhoto(r.result); r.readAsDataURL(file); };
+  const handleJournalPhoto = (e) => { const file = e.target.files?.[0]; if (!file) return; const r = new FileReader(); r.onload = () => setJournalPhoto(r.result); r.readAsDataURL(file); setShowAttachMenu(false); };
+  const handleVideo = (e) => { const file = e.target.files?.[0]; if (!file) return; setVideo(URL.createObjectURL(file)); setShowAttachMenu(false); };
+  const removeVideo = () => setVideo(null);
+  const addMusicTag = () => { const val = window.prompt("Song or artist"); if (val && val.trim()) setMusicTag(val.trim()); setShowAttachMenu(false); };
+  const rerollTopic = () => setTopic(TOPICS[Math.floor(Math.random() * TOPICS.length)]);
+  const resetAudio = () => { setAudioBlob(null); setAudioTimer(0); };
+
+  const startRec = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream); mediaRef.current = mr; chunksRef.current = [];
+      mr.ondataavailable = e => chunksRef.current.push(e.data);
+      mr.onstop = () => { setAudioBlob(new Blob(chunksRef.current, { type: "audio/webm" })); setAudioDuration(audioTimer); stream.getTracks().forEach(t => t.stop()); };
+      mr.start(); setRecording(true); setAudioTimer(0);
+      timerRef.current = setInterval(() => setAudioTimer(s => { if (audioMode === "impromptu" && s >= 60) { stopRec(); return s; } return s + 1; }), 1000);
+    } catch { alert("Microphone access needed"); }
+  };
+  const stopRec = () => { if (mediaRef.current && recording) { mediaRef.current.stop(); setRecording(false); clearInterval(timerRef.current); } };
+  useEffect(() => () => clearInterval(timerRef.current), []);
+
+  // Builds a snapshot of today (mood, journal text, which habits/tasks were
+  // done, whether photo/audio were attached) and hands it up to the shared
+  // journalEntries state so the Journal and You tabs see it immediately.
+  // Saving again the same day updates that day's entry rather than duplicating it.
+  const saveEntry = () => {
+    const habitsSnapshot = habits.map(h => ({ id: h.id, done: !!habitsDone[h.id] }));
+    const hit = habitsSnapshot.filter(h => h.done).length;
+    addEntry({
+      id: Date.now(), date: new Date(TODAY), mood, text: journalText,
+      words: journalText.split(/\s+/).filter(Boolean).length,
+      habitsSnapshot, habitsDone: hit, habitsTotal: habits.length,
+      tasksSnapshot: tasks.map(t => ({ text: t.text, done: t.done })),
+      hasPhoto: !!(progressPhoto || journalPhoto), hasAudio: !!audioBlob, audioDuration,
+    });
+    if (habits.length) setHabits(hs => hs.map(h => habitsDone[h.id] ? { ...h, streak: h.streak + 1 } : { ...h, streak: 0 }));
+    const w = parseFloat(weightInput);
+    if (!isNaN(w)) addWeight({ date: new Date(TODAY), weight: w });
+    setSaved(true);
+  };
+
+  const reflectProps = { mood, setMood, journalText, setJournalText, progressPhoto, setProgressPhoto, handleProgressPhoto, settings, onExpand: () => setExpanded(true), recording, audioBlob, audioTimer, audioDuration, audioMode, setAudioMode, topic, setTopic, rerollTopic, startRec, stopRec, resetAudio, weightInput, setWeightInput };
+  const fullEditorProps = { journalText, setJournalText, journalPhoto, setJournalPhoto, video, removeVideo, musicTag, setMusicTag };
+
+  return (
+    <div className="view-in" style={{ padding: "0 16px 28px" }}>
+      <div style={{ paddingTop: 24, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: C.textDim, fontWeight: 600, letterSpacing: "0.1em" }}>{DAY_NAMES[TODAY.getDay()].toUpperCase()} · {MONTH_NAMES[TODAY.getMonth()]} {TODAY.getDate()}</div>
+        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Today's <span style={{ color: C.yellow }}>Focus.</span></div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20 }}>
+        <button onClick={() => setWeekOffset(o => o - 1)} style={{ ...iconBtnStyle, width: 26, height: 26, fontSize: 13 }}>‹</button>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 4, flex: 1 }}>
+          {weekDays.map((d, i) => (
+            <div key={i} className="row-tap" onClick={() => goToDay(d.fullDate)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer" }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: d.today ? C.yellow : C.textDim }}>{d.label}</span>
+              <div style={{ width: 30, height: 30, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: d.today ? C.yellow : "transparent", border: `1px solid ${d.today ? C.yellow : C.border}`, fontSize: 12, fontWeight: 800, color: d.today ? "#000" : C.textMid }}>{d.date}</div>
+              <div style={{ width: 4, height: 4, borderRadius: "50%", background: d.hasEntry ? C.yellow : C.bgRaised }} />
+            </div>
+          ))}
+        </div>
+        <button onClick={() => setWeekOffset(o => Math.min(0, o + 1))} disabled={weekOffset >= 0} style={{ ...iconBtnStyle, width: 26, height: 26, fontSize: 13, opacity: weekOffset >= 0 ? 0.3 : 1, cursor: weekOffset >= 0 ? "default" : "pointer" }}>›</button>
+      </div>
+
+      <SL>Tasks</SL>
+      {tasks.filter(t => t.carry && !t.done).length > 0 && <div style={{ fontSize: 11, color: C.yellowDim, fontWeight: 600, marginBottom: 8 }}>↩ {tasks.filter(t => t.carry && !t.done).length} carried from yesterday</div>}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div style={{ position: "relative", width: 36, height: 36, flexShrink: 0 }}>
+            <svg width="36" height="36" style={{ transform: "rotate(-90deg)" }}>
+              <circle cx="18" cy="18" r="15" fill="none" stroke={C.bgRaised} strokeWidth="3" />
+              <circle cx="18" cy="18" r="15" fill="none" stroke={C.yellow} strokeWidth="3" strokeDasharray={2 * Math.PI * 15} strokeDashoffset={2 * Math.PI * 15 * (1 - pct / 100)} strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.7s ease" }} />
+            </svg>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 900, color: C.yellow }}>{pct}%</div>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textMid }}>{done}/{tasks.length} done</div>
+        </div>
+        {tasks.map((t, i) => (
+          <div key={t.id} className="row-tap" onClick={() => toggleTask(t.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 6px", margin: "0 -6px", borderBottom: i < tasks.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer" }}>
+            <div className="check-box" style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${t.done ? C.yellow : C.borderMid}`, background: t.done ? C.yellow : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {t.done && <span style={{ fontSize: 11, color: "#000", fontWeight: 900, lineHeight: 1 }}>✓</span>}
+            </div>
+            <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: t.done ? C.textDim : C.text, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</span>
+            {t.carry && !t.done && <span style={{ fontSize: 9, color: C.yellowDim, fontWeight: 700 }}>CARRY</span>}
+          </div>
+        ))}
+        {tasks.length === 0 && <div style={{ fontSize: 12, color: C.textDim, padding: "8px 0" }}>No tasks yet — add one below.</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <input value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key === "Enter" && addTask()} placeholder="Add a task..." style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          <button onClick={addTask} style={{ background: C.yellow, color: "#000", border: "none", borderRadius: 8, width: 36, fontWeight: 900, fontSize: 18, cursor: "pointer", flexShrink: 0 }}>+</button>
+        </div>
+      </Card>
+
+      <SL>Habits</SL>
+      <Card>
+        {habits.map((h, i) => (
+          <div key={h.id} className="row-tap" onClick={() => toggleHabitDone(h.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 6px", margin: "0 -6px", borderBottom: i < habits.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer" }}>
+            <span style={{ fontSize: 18 }}>{h.icon}</span>
+            <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{h.name}</div><div style={{ fontSize: 11, color: C.yellow, marginTop: 2 }}>🔥 {h.streak}d</div></div>
+            <div className="check-box" style={{ width: 24, height: 24, borderRadius: 7, border: `2px solid ${habitsDone[h.id] ? C.yellow : C.borderMid}`, background: habitsDone[h.id] ? C.yellow : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              {habitsDone[h.id] && <span style={{ fontSize: 12, color: "#000", fontWeight: 900 }}>✓</span>}
+            </div>
+          </div>
+        ))}
+        {habits.length === 0 && <div style={{ fontSize: 12, color: C.textDim, padding: "8px 0" }}>No habits yet — add some from the You tab.</div>}
+      </Card>
+
+      {/* Q{n} Goals — just a reminder here, deliberately styled as tags rather
+          than a checklist. Checking them off happens on the You tab, not here. */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 22, marginBottom: 9 }}>
+        <Label style={{ marginBottom: 0 }}>Q{CURRENT_QUARTER} Goals</Label>
+        <span style={{ fontSize: 10, fontWeight: 700, color: C.textDim }}>{QUARTER_DAYS_LEFT}d left</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 12 }}>
+        {goals.map((g) => (
+          <span key={g.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 13px", borderRadius: 99, background: g.done ? C.green + "18" : C.bgCard, border: `1px solid ${g.done ? C.green + "55" : C.borderMid}`, fontSize: 12, fontWeight: 700, color: g.done ? C.green : C.text, textDecoration: g.done ? "line-through" : "none" }}>
+            {g.done && "🥳"}{g.text}
+          </span>
+        ))}
+        {goals.length === 0 && <span style={{ fontSize: 11, color: C.textDim }}>No goals yet — add some from the You tab.</span>}
+      </div>
+
+      <SL>Reflect</SL>
+      <Card>
+        <ReflectCard {...reflectProps} />
+      </Card>
+
+      <button onClick={saveEntry} style={{ width: "100%", marginTop: 8, padding: "15px 0", borderRadius: 14, background: saved ? C.green : C.yellow, color: "#000", border: "none", fontWeight: 900, fontSize: 16, cursor: "pointer", fontFamily: "inherit", transition: "background 0.3s" }}>
+        {saved ? "✓  Entry Saved" : "Save Today's Entry"}
+      </button>
+
+      {expanded && (
+        <div style={{ position: "fixed", inset: 0, background: C.bg, zIndex: 200, overflowY: "auto", maxWidth: 430, margin: "0 auto" }}>
+          <div style={{ padding: "calc(16px + env(safe-area-inset-top,0px)) 16px 40px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <button onClick={() => { setExpanded(false); setShowAttachMenu(false); }} style={iconBtnStyle}>←</button>
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setShowAttachMenu(v => !v)} style={iconBtnStyle}>⋯</button>
+                {showAttachMenu && (
+                  <div style={{ position: "absolute", top: 42, right: 0, background: C.bgRaised, border: `1px solid ${C.borderMid}`, borderRadius: 12, padding: 6, zIndex: 20, display: "flex", flexDirection: "column", minWidth: 170, boxShadow: "0 8px 28px rgba(0,0,0,0.5)" }}>
+                    {settings.journalPhoto && <button onClick={() => journalPhotoInputRef.current && journalPhotoInputRef.current.click()} style={{ background: "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, textAlign: "left", padding: "10px 10px", cursor: "pointer", borderRadius: 8, fontFamily: "inherit" }}>📷 Add Photo</button>}
+                    {settings.video && <button onClick={() => journalVideoInputRef.current && journalVideoInputRef.current.click()} style={{ background: "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, textAlign: "left", padding: "10px 10px", cursor: "pointer", borderRadius: 8, fontFamily: "inherit" }}>🎬 Add Video</button>}
+                    {settings.music && <button onClick={addMusicTag} style={{ background: "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, textAlign: "left", padding: "10px 10px", cursor: "pointer", borderRadius: 8, fontFamily: "inherit" }}>🎵 Add Song</button>}
+                  </div>
+                )}
+                <input ref={journalPhotoInputRef} type="file" accept="image/*" capture="environment" onChange={handleJournalPhoto} style={{ display: "none" }} />
+                <input ref={journalVideoInputRef} type="file" accept="video/*" capture="environment" onChange={handleVideo} style={{ display: "none" }} />
+              </div>
+            </div>
+            <JournalFullEditor {...fullEditorProps} />
+            <button onClick={() => { saveEntry(); setExpanded(false); }} style={{ width: "100%", marginTop: 20, padding: "15px 0", borderRadius: 14, background: C.yellow, color: "#000", border: "none", fontWeight: 900, fontSize: 16, cursor: "pointer", fontFamily: "inherit" }}>
+              Save Entry
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── JOURNAL TAB ────────────────────────────────────────────────────────────
+function JournalTab({ entries, jump, clearJump, goHome }) {
+  const findEntryForDate = (d) => d ? (entries.find(e => sameDay(e.date, d)) || null) : null;
+  const [selectedEntry, setSelectedEntry] = useState(null);
+  const [cameFromHome, setCameFromHome] = useState(false);
+  // The tab now stays mounted (so Home's draft state survives switching tabs),
+  // so react to a fresh jump — tapping a day on Home — whenever it arrives,
+  // rather than only once on mount, then consume it so it doesn't re-fire.
+  useEffect(() => {
+    if (jump) { setSelectedEntry(findEntryForDate(jump.date)); setCameFromHome(!!jump.fromHome); clearJump(); }
+  }, [jump]);
+  const [search, setSearch] = useState("");
+  const [dateFilter, setDateFilter] = useState("all");
+  const [moodFilter, setMoodFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  const formatDate = (d) => { const diff = Math.floor((TODAY - d) / 86400000); if (diff === 0) return "Today"; if (diff === 1) return "Yesterday"; return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`; };
+  const moodColor = (m) => m >= 8 ? C.yellow : m >= 6 ? C.textMid : C.red;
+  const moodEmoji = (m) => m >= 8 ? "🔥" : m >= 6 ? "😐" : "💀";
+
+  if (selectedEntry) {
+    const e = selectedEntry;
+    return (
+      <div className="view-in" style={{ padding: "0 0 28px" }}>
+        <div style={{ padding: "16px 16px 0" }}>
+          <button onClick={() => { if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", padding: 0, marginBottom: 16 }}>← Back</button>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.1em" }}>{formatDate(e.date).toUpperCase()}</div>
+              <div style={{ fontSize: 26, fontWeight: 900, marginTop: 4 }}>{moodEmoji(e.mood)} {e.mood}/10</div>
+            </div>
+            {e.habitsTotal > 0 && <Chip color={e.habitsDone === e.habitsTotal ? C.green : C.yellow} size={10}>{e.habitsDone}/{e.habitsTotal} habits</Chip>}
+          </div>
+        </div>
+        {(() => {
+          const dayTasks = e.tasksSnapshot;
+          if (!dayTasks || !dayTasks.length) return null;
+          const hitCount = dayTasks.filter(t => t.done).length;
+          return (
+            <div style={{ margin: "16px 16px 0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <Label style={{ marginBottom: 0 }}>Tasks that day</Label>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.textDim }}>{hitCount}/{dayTasks.length} done</span>
+              </div>
+              <Card>
+                {dayTasks.map((t, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < dayTasks.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    <div style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `2px solid ${t.done ? C.green : C.red}`, background: t.done ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <span style={{ fontSize: 11, color: t.done ? "#000" : C.red, fontWeight: 900, lineHeight: 1 }}>{t.done ? "✓" : "✕"}</span>
+                    </div>
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: t.done ? C.textMid : C.text, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</span>
+                  </div>
+                ))}
+              </Card>
+            </div>
+          );
+        })()}
+        {e.hasPhoto && <div style={{ margin: "16px 16px 0", height: 180, background: C.bgCard, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}><div style={{ fontSize: 40 }}>📸</div><div style={{ fontSize: 12, color: C.textDim }}>Progress photo · {formatDate(e.date)}</div></div>}
+        {e.hasAudio && <div style={{ margin: "16px 16px 0", display: "flex", alignItems: "center", gap: 12, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}><div style={{ width: 36, height: 36, borderRadius: "50%", background: C.purple + "22", border: `1px solid ${C.purple}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🎙</div><div><div style={{ fontSize: 12, fontWeight: 700 }}>Voice note</div><div style={{ fontSize: 11, color: C.textDim }}>{fmtS(e.audioDuration)}</div></div></div>}
+        <div style={{ padding: "16px 16px 0" }}><div style={{ fontSize: 15, color: C.text, lineHeight: 1.75 }}>{e.text}</div><div style={{ fontSize: 11, color: C.textDim, marginTop: 8 }}>{e.words} words</div></div>
+      </div>
+    );
+  }
+
+  const inRange = (d) => {
+    const days = Math.floor((TODAY - d) / 86400000);
+    if (dateFilter === "7d") return days <= 7;
+    if (dateFilter === "30d") return days <= 30;
+    if (dateFilter === "month") return d.getMonth() === TODAY.getMonth() && d.getFullYear() === TODAY.getFullYear();
+    return true;
+  };
+  const inMood = (m) => moodFilter === "all" || (moodFilter === "high" && m >= 8) || (moodFilter === "mid" && m >= 5 && m < 8) || (moodFilter === "low" && m < 5);
+  const inType = (e) => typeFilter === "all" || (typeFilter === "photo" && e.hasPhoto) || (typeFilter === "audio" && e.hasAudio);
+  const filtered = entries.filter(e => inRange(e.date) && inMood(e.mood) && inType(e) && (!search.trim() || e.text.toLowerCase().includes(search.toLowerCase())));
+
+  const avgMood = filtered.length ? (filtered.reduce((a, e) => a + e.mood, 0) / filtered.length).toFixed(1) : "—";
+  const totalWords = filtered.reduce((a, e) => a + e.words, 0);
+
+  return (
+    <div className="view-in" style={{ padding: "0 16px 28px" }}>
+      <div style={{ paddingTop: 24, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: C.textDim, fontWeight: 600, letterSpacing: "0.1em" }}>{entries.length} ENTRIES</div>
+        <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Your <span style={{ color: C.yellow }}>Record.</span></div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+        {[{ v: filtered.length, l: "Entries" }, { v: avgMood, l: "Avg mood" }, { v: totalWords.toLocaleString(), l: "Words" }].map((s, i) => (
+          <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 10px", textAlign: "center" }}>
+            <div style={{ fontSize: 20, fontWeight: 900, color: C.yellow }}>{s.v}</div>
+            <div style={{ fontSize: 10, color: C.textDim, marginTop: 4, fontWeight: 600 }}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+        <span style={{ fontSize: 14, color: C.textDim }}>🔍</span>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search entries..." style={{ flex: 1, background: "transparent", border: "none", color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+        {search && <button onClick={() => setSearch("")} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer" }}>×</button>}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
+        {[["all", "All time"], ["7d", "Last 7 days"], ["30d", "Last 30 days"], ["month", "This month"]].map(([v, l]) => (
+          <FilterChip key={v} active={dateFilter === v} onClick={() => setDateFilter(v)}>{l}</FilterChip>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
+        {[["all", "Any mood"], ["high", "🔥 High"], ["mid", "😐 Mid"], ["low", "💀 Low"]].map(([v, l]) => (
+          <FilterChip key={v} active={moodFilter === v} onClick={() => setMoodFilter(v)}>{l}</FilterChip>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+        {[["all", "All entries"], ["photo", "📸 Has photo"], ["audio", "🎙 Has audio"]].map(([v, l]) => (
+          <FilterChip key={v} active={typeFilter === v} onClick={() => setTypeFilter(v)}>{l}</FilterChip>
+        ))}
+      </div>
+
+      {filtered.length === 0 && <div style={{ textAlign: "center", padding: "40px 0", color: C.textDim, fontSize: 13 }}>{entries.length === 0 ? "No entries yet — save your first one from the Home tab." : "No entries match your filters."}</div>}
+
+      {filtered.map(e => (
+        <div key={e.id} className="row-tap" onClick={() => { setSelectedEntry(e); setCameFromHome(false); }} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 8, cursor: "pointer" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.08em" }}>{formatDate(e.date).toUpperCase()}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 18 }}>{moodEmoji(e.mood)}</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: moodColor(e.mood) }}>{e.mood}/10</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {e.hasPhoto && <span style={{ fontSize: 12 }}>📸</span>}
+              {e.hasAudio && <span style={{ fontSize: 12 }}>🎙</span>}
+            </div>
+          </div>
+          <div style={{ fontSize: 13, color: C.textMid, lineHeight: 1.6, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{e.text}</div>
+          {e.habitsTotal > 0 && <Chip color={e.habitsDone === e.habitsTotal ? C.green : C.yellow} size={10}>{e.habitsDone}/{e.habitsTotal} habits</Chip>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Per-habit tracker ──────────────────────────────────────────────────────
+function HabitTracker({ habits, journalEntries }) {
+  const [activeId, setActiveId] = useState(habits[0]?.id);
+  useEffect(() => { if (!habits.find(h => h.id === activeId)) setActiveId(habits[0]?.id); }, [habits]);
+  if (!habits.length) return <Card><div style={{ fontSize: 12, color: C.textDim }}>Add a habit above to see its trend here.</div></Card>;
+  const habit = habits.find(h => h.id === activeId) || habits[0];
+  const days = buildHabitDays(habit.id, journalEntries);
+  const rate = Math.round((days.filter(d => d.done).length / days.length) * 100);
+  let trailingStreak = 0;
+  for (let i = days.length - 1; i >= 0; i--) { if (days[i].done) trailingStreak++; else break; }
+
+  return (
+    <Card>
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 14, paddingBottom: 2 }}>
+        {habits.map(h => (
+          <button key={h.id} onClick={() => setActiveId(h.id)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 9, background: activeId === h.id ? C.yellow : C.bgRaised, color: activeId === h.id ? "#000" : C.textMid, border: `1px solid ${activeId === h.id ? C.yellow : C.border}`, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, whiteSpace: "nowrap" }}>
+            <span>{h.icon}</span>{h.name}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", marginBottom: 14 }}>
+        {[["🔥" + habit.streak, "Current streak"], [rate + "%", "Last 30 days"], [trailingStreak + "d", "Trailing hits"]].map(([v, l]) => (
+          <div key={l} style={{ textAlign: "center", flex: 1 }}>
+            <div style={{ fontSize: 17, fontWeight: 900, color: l === "Trailing hits" ? C.green : C.text }}>{v}</div>
+            <div style={{ fontSize: 9, color: C.textDim, marginTop: 2 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(10,1fr)", gap: 4 }}>
+        {days.map((d, i) => (
+          <div key={i} title={d.date.toDateString()} style={{ aspectRatio: "1", borderRadius: 4, background: d.done ? C.yellow : C.bgRaised, border: `1px solid ${d.done ? C.yellow : C.border}` }} />
+        ))}
+      </div>
+      <div style={{ fontSize: 10, color: C.textDim, marginTop: 8 }}>Last 30 days, oldest → today</div>
+    </Card>
+  );
+}
+
+// ─── Settings panel ───────────────────────────────────────────────────────────
+function SettingsPanel({ settings, setSettings, onClose }) {
+  const rows = [
+    ["voice", "🎙", "Voice journaling", "Show the audio-note recorder"],
+    ["photo", "📸", "Progress photo", "Show the daily progress photo in Reflect"],
+    ["journalPhoto", "🖼", "Journal photos", "Add general photos inside your journal entry"],
+    ["video", "🎬", "Video attachments", "Allow videos in the journal entry"],
+    ["music", "🎵", "Song tagging", "Tag a song/soundtrack to an entry"],
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 430, background: C.bgCard, borderTopLeftRadius: 20, borderTopRightRadius: 20, border: `1px solid ${C.border}`, padding: "20px 16px calc(24px + env(safe-area-inset-bottom,0px))" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontSize: 18, fontWeight: 900 }}>Settings</div>
+          <button onClick={onClose} style={iconBtnStyle}>✕</button>
+        </div>
+        {rows.map(([key, icon, label, desc], i) => (
+          <div key={key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : "none" }}>
+            <span style={{ fontSize: 18 }}>{icon}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{label}</div>
+              <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{desc}</div>
+            </div>
+            <Toggle on={settings[key]} onClick={() => setSettings(s => ({ ...s, [key]: !s[key] }))} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── YOU TAB ────────────────────────────────────────────────────────────────
+function YouTab({ goals, setGoals, habits, setHabits, journalEntries, weightHistory, identity, setIdentity, onOpenSettings }) {
+  const calData = buildCalData(journalEntries);
+  const streak = currentStreak(journalEntries);
+  const [editingMission, setEditingMission] = useState(false);
+  const [editWhy, setEditWhy] = useState(identity.why);
+  const [editMissionText, setEditMissionText] = useState(identity.mission);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [moodRange, setMoodRange] = useState(7);
+  const [weightRange, setWeightRange] = useState(30);
+
+  const [manageHabits, setManageHabits] = useState(false);
+  const [newHabitName, setNewHabitName] = useState("");
+  const [newHabitIcon, setNewHabitIcon] = useState("✅");
+  const [manageGoals, setManageGoals] = useState(false);
+  const [newGoalText, setNewGoalText] = useState("");
+
+  const year = TODAY.getFullYear(); const month = TODAY.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const scoreColor = (s) => s === "great" ? C.green : s === "ok" ? C.yellow : s === "bad" ? C.orange : C.bgRaised;
+  const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+
+  const moodData = Array.from({ length: moodRange }, (_, i) => {
+    const d = new Date(TODAY); d.setDate(TODAY.getDate() - (moodRange - 1 - i));
+    const key = dateKey(d);
+    return calData[key] ? { date: d, mood: calData[key].mood } : null;
+  }).filter(Boolean);
+  const moodAvg = moodData.length ? (moodData.reduce((a, e) => a + e.mood, 0) / moodData.length).toFixed(1) : "—";
+  const moodDelta = moodData.length ? moodData[moodData.length - 1].mood - moodData[0].mood : 0;
+
+  const weightData = weightHistory.slice(-weightRange);
+  const weightDelta = weightData.length ? Math.round((weightData[weightData.length - 1].weight - weightData[0].weight) * 10) / 10 : 0;
+  const weightStatus = !weightData.length ? { label: "No data", color: C.textDim } : Math.abs(weightDelta) < 0.5 ? { label: "Stable", color: C.green } : weightDelta > 0 ? { label: "Up", color: C.orange } : { label: "Down", color: C.blue };
+
+  const saveMission = () => { setIdentity({ why: editWhy, mission: editMissionText }); setEditingMission(false); };
+
+  // Habit CRUD
+  const updateHabit = (id, field, val) => setHabits(hs => hs.map(h => h.id === id ? { ...h, [field]: val } : h));
+  const deleteHabit = (id) => setHabits(hs => hs.filter(h => h.id !== id));
+  const addHabit = () => { if (!newHabitName.trim()) return; setHabits(hs => [...hs, { id: Date.now(), name: newHabitName, icon: newHabitIcon || "✅", streak: 0 }]); setNewHabitName(""); setNewHabitIcon("✅"); };
+
+  // Goal CRUD
+  const updateGoal = (id, field, val) => setGoals(gs => gs.map(g => g.id === id ? { ...g, [field]: val } : g));
+  const deleteGoal = (id) => setGoals(gs => gs.filter(g => g.id !== id));
+  const toggleGoalDone = (id) => setGoals(gs => gs.map(g => g.id === id ? { ...g, done: !g.done } : g));
+  const addGoal = () => {
+    if (!newGoalText.trim()) return;
+    const color = GOAL_COLORS[goals.length % GOAL_COLORS.length];
+    setGoals(gs => [...gs, { id: Date.now(), text: newGoalText, done: false, color }]);
+    setNewGoalText("");
+  };
+
+  return (
+    <div className="view-in" style={{ padding: "0 16px 28px" }}>
+      <div style={{ paddingTop: 28, display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+        <div style={{ width: 72, height: 72, borderRadius: "50%", background: C.yellow, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, fontWeight: 900, color: "#000", flexShrink: 0, boxShadow: `0 0 30px ${C.yellowGlowStrong}` }}>J</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 26, fontWeight: 900 }}>Jed</div>
+          <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>{journalEntries.length ? `Day ${journalEntries.length} · 🔥 ${streak}d streak` : "Day 1 · Start your streak"}</div>
+        </div>
+        <button onClick={onOpenSettings} style={iconBtnStyle}>⚙</button>
+      </div>
+
+      <Card glow style={{ display: "flex", alignItems: "center", gap: 18 }}>
+        <div style={{ fontSize: 44, flexShrink: 0 }}>🔥</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 40, fontWeight: 900, color: C.yellow, lineHeight: 1 }}>{streak}<span style={{ fontSize: 18, fontWeight: 700, color: C.textMid }}> days</span></div>
+          <div style={{ fontSize: 11, color: C.textDim, marginTop: 4, fontWeight: 600 }}>Current streak — don't break it</div>
+        </div>
+      </Card>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 22, marginBottom: 10 }}>
+        <Label>Mission</Label>
+        <button onClick={editingMission ? saveMission : () => setEditingMission(true)} style={{ background: editingMission ? C.yellow : C.bgCard, border: `1px solid ${editingMission ? C.yellow : C.borderMid}`, borderRadius: 9, padding: "5px 12px", color: editingMission ? "#000" : C.textMid, fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+          {editingMission ? "Save" : "Edit"}
+        </button>
+      </div>
+      <Card>
+        {[["My Why", identity.why, editWhy, setEditWhy, C.yellow], ["Mission", identity.mission, editMissionText, setEditMissionText, C.purple]].map(([label, val, editVal, setEdit, color], idx) => (
+          <div key={label} style={{ marginBottom: idx < 1 ? 14 : 0, paddingBottom: idx < 1 ? 14 : 0, borderBottom: idx < 1 ? `1px solid ${C.border}` : "none" }}>
+            <div style={{ fontSize: 10, color: color, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
+            {editingMission
+              ? <textarea value={editVal} onChange={e => setEdit(e.target.value)} rows={3} placeholder={label === "My Why" ? "Why does this matter to you?" : "What are you building?"} style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.borderMid}`, borderRadius: 8, padding: "10px 12px", color: C.text, fontSize: 13, fontFamily: "inherit", lineHeight: 1.6, outline: "none", resize: "none", boxSizing: "border-box" }} />
+              : <div style={{ fontSize: 13, color: val ? C.text : C.textDim, lineHeight: 1.7 }}>{val || `Tap Edit to write your ${label.toLowerCase()}.`}</div>}
+          </div>
+        ))}
+      </Card>
+
+      <SL>{MONTH_NAMES[month]} {year}</SL>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
+          {[["great", C.green], ["ok", C.yellow], ["bad", C.orange], ["miss", C.bgRaised]].map(([s, c]) => (
+            <div key={s} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: c, border: s === "miss" ? `1px solid ${C.border}` : "none" }} />
+              <span style={{ fontSize: 9, color: C.textDim, fontWeight: 600 }}>{s === "great" ? "All" : s === "ok" ? "Most" : s === "bad" ? "Some" : "None"}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 4 }}>
+          {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: C.textDim, fontWeight: 700, paddingBottom: 4 }}>{d}</div>)}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const key = `${year}-${month}-${d}`;
+            const day = calData[key];
+            const isToday = d === TODAY.getDate();
+            const isSelected = selectedDay === d;
+            return (
+              <div key={i} className="row-tap" onClick={() => setSelectedDay(isSelected ? null : d)} style={{ aspectRatio: "1", borderRadius: 8, background: day ? scoreColor(day.score) : C.bgRaised, border: isToday ? `2px solid ${C.yellow}` : isSelected ? `2px solid ${C.text}` : `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                <span style={{ fontSize: 11, fontWeight: isToday ? 900 : 600, color: day && day.score !== "miss" ? "#000" : C.textDim }}>{d}</span>
+              </div>
+            );
+          })}
+        </div>
+        {selectedDay && (() => {
+          const key = `${year}-${month}-${selectedDay}`;
+          const day = calData[key];
+          if (!day) return null;
+          return (
+            <div style={{ marginTop: 10, background: C.bgRaised, border: `1px solid ${C.yellow}44`, borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 800 }}>{MONTH_NAMES[month]} {selectedDay}</div>
+                <button onClick={() => setSelectedDay(null)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer" }}>×</button>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-around" }}>
+                <div style={{ textAlign: "center" }}><div style={{ fontSize: 13, fontWeight: 800, color: C.yellow }}>{day.mood}/10</div><div style={{ fontSize: 9, color: C.textDim, marginTop: 2 }}>Mood</div></div>
+                <div style={{ textAlign: "center" }}><div style={{ fontSize: 13, fontWeight: 800, color: C.green }}>{day.summary}</div><div style={{ fontSize: 9, color: C.textDim, marginTop: 2 }}>Habits</div></div>
+              </div>
+            </div>
+          );
+        })()}
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 6 }}>
+        {[["🔥", "Best streak", "—"], ["✅", "All habits hit", "—"], ["⚡", "Completion rate", "—"], ["📈", "vs last month", "—"]].map(([ic, l, v]) => (
+          <div key={l} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+            <div style={{ fontSize: 18, marginBottom: 4 }}>{ic}</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{v}</div>
+            <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Habits management ── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 22, marginBottom: 10 }}>
+        <Label>Manage Habits</Label>
+        <button onClick={() => setManageHabits(m => !m)} style={manageBtnStyle(manageHabits)}>{manageHabits ? "Done" : "Edit"}</button>
+      </div>
+      <Card>
+        {habits.map((h, i) => (
+          <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < habits.length - 1 ? `1px solid ${C.border}` : "none" }}>
+            {manageHabits ? (
+              <>
+                <input value={h.icon} onChange={e => updateHabit(h.id, "icon", e.target.value)} style={{ ...miniInputStyle, width: 40, textAlign: "center", padding: "6px 2px" }} />
+                <input value={h.name} onChange={e => updateHabit(h.id, "name", e.target.value)} style={{ ...miniInputStyle, flex: 1 }} />
+                <button onClick={() => deleteHabit(h.id)} style={{ background: "transparent", border: "none", color: C.red, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: 18 }}>{h.icon}</span>
+                <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{h.name}</div></div>
+                <span style={{ fontSize: 11, color: C.yellow }}>🔥 {h.streak}d</span>
+              </>
+            )}
+          </div>
+        ))}
+        {habits.length === 0 && <div style={{ fontSize: 12, color: C.textDim, padding: "8px 0" }}>No habits yet — add one below.</div>}
+        {manageHabits && (
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <input value={newHabitIcon} onChange={e => setNewHabitIcon(e.target.value)} placeholder="🔥" style={{ ...miniInputStyle, width: 44, textAlign: "center", padding: "9px 4px" }} />
+            <input value={newHabitName} onChange={e => setNewHabitName(e.target.value)} onKeyDown={e => e.key === "Enter" && addHabit()} placeholder="New habit..." style={{ ...miniInputStyle, flex: 1, padding: "9px 12px" }} />
+            <button onClick={addHabit} style={{ background: C.yellow, color: "#000", border: "none", borderRadius: 8, width: 36, fontWeight: 900, fontSize: 18, cursor: "pointer", flexShrink: 0 }}>+</button>
+          </div>
+        )}
+      </Card>
+
+      <HabitTracker habits={habits} journalEntries={journalEntries} />
+
+      {/* ── Goals management + tracking — all pegged to the current quarter ── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 22, marginBottom: 2 }}>
+        <Label style={{ marginBottom: 0 }}>Q{CURRENT_QUARTER} Goals · {goals.filter(g => g.done).length}/{goals.length} complete</Label>
+        <button onClick={() => setManageGoals(m => !m)} style={manageBtnStyle(manageGoals)}>{manageGoals ? "Done" : "Edit"}</button>
+      </div>
+      <div style={{ fontSize: 11, color: QUARTER_DAYS_LEFT <= 14 ? C.red : C.textDim, marginBottom: 10 }}>{QUARTER_DAYS_LEFT} days left in Q{CURRENT_QUARTER}</div>
+      {goals.map((g) => (
+        <div key={g.id} style={{ background: C.bgCard, border: `1px solid ${g.done ? g.color + "55" : C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+          {manageGoals ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input value={g.text} onChange={e => updateGoal(g.id, "text", e.target.value)} style={{ ...miniInputStyle }} />
+              <button onClick={() => deleteGoal(g.id)} style={{ alignSelf: "flex-end", background: "transparent", border: "none", color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
+            </div>
+          ) : (
+            <>
+              <div className="row-tap" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, padding: "2px 4px", margin: "0 -4px 4px" }} onClick={() => toggleGoalDone(g.id)}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: g.done ? C.green : g.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 14, fontWeight: 700, flex: 1, textDecoration: g.done ? "line-through" : "none", color: g.done ? C.green : C.text, cursor: "pointer" }}>{g.done ? "🥳 " : ""}{g.text}</span>
+                <div className="goal-check" style={{ width: 26, height: 26, borderRadius: 8, border: `2px solid ${g.done ? C.green : C.borderMid}`, background: g.done ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer" }}>
+                  {g.done && <span style={{ fontSize: 14, color: "#000", fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: g.done ? C.textDim : (QUARTER_DAYS_LEFT <= 14 ? C.red : C.textDim), marginTop: 2 }}>{g.done ? "Completed" : `${QUARTER_DAYS_LEFT} days left in Q${CURRENT_QUARTER}`}</div>
+            </>
+          )}
+        </div>
+      ))}
+      {goals.length === 0 && !manageGoals && <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>No goals yet — tap Edit to add some.</div>}
+      {manageGoals && (
+        <Card>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <input value={newGoalText} onChange={e => setNewGoalText(e.target.value)} onKeyDown={e => e.key === "Enter" && addGoal()} placeholder="New goal..." style={{ ...miniInputStyle, padding: "9px 12px" }} />
+            <div style={{ fontSize: 11, color: C.textDim }}>Every goal runs through the end of Q{CURRENT_QUARTER} — {QUARTER_DAYS_LEFT}d left. No numbers to fuss with, just mark it done.</div>
+            <button onClick={addGoal} style={{ background: C.yellow, color: "#000", border: "none", borderRadius: 8, padding: "9px 0", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>+ Add Goal</button>
+          </div>
+        </Card>
+      )}
+
+      <SL>Mood Trend</SL>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <select value={moodRange} onChange={e => setMoodRange(+e.target.value)} style={selectStyle}>
+            {RANGE_OPTIONS.map(o => <option key={o} value={o}>{o}D</option>)}
+          </select>
+          <Chip color={moodDelta >= 0 ? C.green : C.red} size={11}>{moodDelta >= 0 ? "+" : ""}{moodDelta} vs start</Chip>
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 900, marginBottom: 8 }}>{moodAvg} <span style={{ fontSize: 12, color: C.textMid, fontWeight: 400 }}>avg</span></div>
+        <InteractiveChart data={moodData} valueKey="mood" color={C.yellow} height={56} unit="/10" />
+      </Card>
+
+      <SL>Bodyweight</SL>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <select value={weightRange} onChange={e => setWeightRange(+e.target.value)} style={selectStyle}>
+            {RANGE_OPTIONS.map(o => <option key={o} value={o}>{o}D</option>)}
+          </select>
+          <Chip color={weightStatus.color} size={11}>{weightData.length ? `${weightStatus.label} (${weightDelta >= 0 ? "+" : ""}${weightDelta} lbs)` : weightStatus.label}</Chip>
+        </div>
+        <div style={{ fontSize: 28, fontWeight: 900, marginBottom: 8 }}>{weightData.length ? weightData[weightData.length - 1].weight : "—"} <span style={{ fontSize: 14, color: C.textMid, fontWeight: 400 }}>lbs</span></div>
+        <InteractiveChart data={weightData} valueKey="weight" color={C.blue} height={56} unit=" lbs" />
+      </Card>
+    </div>
+  );
+}
+
+// ─── APP ROOT ─────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "discipline-app-v1";
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    p.journalEntries = (p.journalEntries || []).map(e => ({ ...e, date: new Date(e.date) }));
+    p.weightHistory = (p.weightHistory || []).map(w => ({ ...w, date: new Date(w.date) }));
+    return p;
+  } catch { return null; }
+}
+
+function App() {
+  const saved = loadSaved();
+  const [tab, setTab] = useState("home");
+  const [goals, setGoals] = useState(saved?.goals ?? INIT_GOALS);
+  const [habits, setHabits] = useState(saved?.habits ?? INIT_HABITS);
+  const [journalEntries, setJournalEntries] = useState(saved?.journalEntries ?? []);
+  const [weightHistory, setWeightHistory] = useState(saved?.weightHistory ?? []);
+  const [identity, setIdentity] = useState(saved?.identity ?? { why: "", mission: "" });
+  const [settings, setSettings] = useState(saved?.settings ?? { voice: true, photo: true, journalPhoto: true, video: true, music: true });
+  const [showSettings, setShowSettings] = useState(false);
+  const [jump, setJump] = useState(null); // { date, fromHome }
+
+  // Persist everything durable (habits, goals, entries, weigh-ins, mission,
+  // settings) to this device's local storage on every change, so it survives
+  // a refresh or fully closing the app. The in-progress "today" draft on the
+  // Home tab (unsaved tasks/mood/journal text) is intentionally left out —
+  // it's finalized by hitting Save, same as before.
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ goals, habits, journalEntries, weightHistory, identity, settings })); } catch {}
+  }, [goals, habits, journalEntries, weightHistory, identity, settings]);
+
+  const goToDay = (d) => { setJump({ date: d, fromHome: true }); setTab("journal"); };
+
+  // Upsert-by-day: saving twice in one day updates that day's record instead
+  // of creating a duplicate entry/weigh-in.
+  const addEntry = (entry) => setJournalEntries(es => { const i = es.findIndex(e => sameDay(e.date, entry.date)); if (i >= 0) { const c = [...es]; c[i] = entry; return c; } return [...es, entry]; });
+  const addWeight = (w) => setWeightHistory(ws => { const i = ws.findIndex(x => sameDay(x.date, w.date)); if (i >= 0) { const c = [...ws]; c[i] = w; return c; } return [...ws, w]; });
+
+  const TABS = [
+    { key: "home", icon: "⚡", label: "Home" },
+    { key: "journal", icon: "📓", label: "Journal" },
+    { key: "you", icon: "◎", label: "You" },
+  ];
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 430, margin: "0 auto", fontFamily: "'Inter',system-ui,sans-serif", color: C.text, display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top,0px)" }}>
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 88, scrollbarWidth: "none" }}>
+        {/* All three tabs stay mounted, just shown/hidden via display — this is
+            what keeps a half-filled Home tab (tasks, draft journal, mood) intact
+            when you switch away and back, instead of remounting from scratch. */}
+        <div style={{ display: tab === "home" ? "block" : "none" }}>
+          <HomeTab habits={habits} setHabits={setHabits} goals={goals} setGoals={setGoals} settings={settings} goToDay={goToDay} journalEntries={journalEntries} addEntry={addEntry} addWeight={addWeight} />
+        </div>
+        <div style={{ display: tab === "journal" ? "block" : "none" }}>
+          <JournalTab entries={journalEntries} jump={jump} clearJump={() => setJump(null)} goHome={() => setTab("home")} />
+        </div>
+        <div style={{ display: tab === "you" ? "block" : "none" }}>
+          <YouTab goals={goals} setGoals={setGoals} habits={habits} setHabits={setHabits} journalEntries={journalEntries} weightHistory={weightHistory} identity={identity} setIdentity={setIdentity} onOpenSettings={() => setShowSettings(true)} />
+        </div>
+      </div>
+
+      <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "#0D0D0D", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-around", alignItems: "center", padding: "10px 0 calc(22px + env(safe-area-inset-bottom,0px))", zIndex: 100 }}>
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 24px", color: tab === t.key ? C.yellow : C.textDim, transition: "color 0.15s" }}>
+            <span style={{ fontSize: 22 }}>{t.icon}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em" }}>{t.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {showSettings && <SettingsPanel settings={settings} setSettings={setSettings} onClose={() => setShowSettings(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => { navigator.serviceWorker.register("service-worker.js").catch(() => {}); });
+  }
+</script>
+</body>
+</html>
