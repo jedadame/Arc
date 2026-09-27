@@ -537,10 +537,11 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
 }
 
 // ─── JOURNAL TAB ────────────────────────────────────────────────────────────
-function JournalTab({ entries, jump, clearJump, goHome }) {
+function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
   const findEntryForDate = (d) => d ? (entries.find(e => sameDay(e.date, d)) || null) : null;
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [cameFromHome, setCameFromHome] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // The tab now stays mounted (so Home's draft state survives switching tabs),
   // so react to a fresh jump — tapping a day on Home — whenever it arrives,
   // rather than only once on mount, then consume it so it doesn't re-fire.
@@ -561,7 +562,22 @@ function JournalTab({ entries, jump, clearJump, goHome }) {
     return (
       <div className="view-in" style={{ padding: "0 0 28px" }}>
         <div style={{ padding: "16px 16px 0" }}>
-          <button onClick={() => { if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", padding: 0, marginBottom: 16 }}>← Back</button>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <button onClick={() => { if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>← Back</button>
+            <button onClick={() => setConfirmDelete(true)} style={{ background: "transparent", border: "none", color: C.red, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>🗑 Delete</button>
+          </div>
+          {confirmDelete && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 24 }} onClick={() => setConfirmDelete(false)}>
+              <div onClick={ev => ev.stopPropagation()} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20, maxWidth: 320, width: "100%" }}>
+                <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>Delete this entry?</div>
+                <div style={{ fontSize: 13, color: C.textMid, lineHeight: 1.5, marginBottom: 18 }}>This can't be undone. Your journal entry for {formatDate(e.date)} will be permanently removed.</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setConfirmDelete(false)} style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.borderMid}`, color: C.text, fontWeight: 700, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                  <button onClick={() => { deleteEntry(e.id); setConfirmDelete(false); if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ flex: 1, background: C.red, border: "none", color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
               <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.1em" }}>{formatDate(e.date).toUpperCase()}</div>
@@ -1031,6 +1047,7 @@ function App() {
   // of creating a duplicate entry/weigh-in.
   const addEntry = (entry) => setJournalEntries(es => { const i = es.findIndex(e => sameDay(e.date, entry.date)); if (i >= 0) { const c = [...es]; c[i] = entry; return c; } return [...es, entry]; });
   const addWeight = (w) => setWeightHistory(ws => { const i = ws.findIndex(x => sameDay(x.date, w.date)); if (i >= 0) { const c = [...ws]; c[i] = w; return c; } return [...ws, w]; });
+  const deleteEntry = (id) => setJournalEntries(es => es.filter(e => e.id !== id));
 
   const TABS = [
     { key: "home", icon: "⚡", label: "Home" },
@@ -1048,7 +1065,7 @@ function App() {
           <HomeTab habits={habits} setHabits={setHabits} goals={goals} setGoals={setGoals} settings={settings} goToDay={goToDay} journalEntries={journalEntries} addEntry={addEntry} addWeight={addWeight} />
         </div>
         <div style={{ display: tab === "journal" ? "block" : "none" }}>
-          <JournalTab entries={journalEntries} jump={jump} clearJump={() => setJump(null)} goHome={() => setTab("home")} />
+          <JournalTab entries={journalEntries} jump={jump} clearJump={() => setJump(null)} goHome={() => setTab("home")} deleteEntry={deleteEntry} />
         </div>
         <div style={{ display: tab === "you" ? "block" : "none" }}>
           <YouTab goals={goals} setGoals={setGoals} habits={habits} setHabits={setHabits} journalEntries={journalEntries} weightHistory={weightHistory} identity={identity} setIdentity={setIdentity} onOpenSettings={() => setShowSettings(true)} />
