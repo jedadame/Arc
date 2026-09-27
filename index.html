@@ -251,7 +251,7 @@ function ReflectCard({ mood, setMood, journalText, setJournalText, progressPhoto
             </div>
           ) : (
             <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "20px 0", borderRadius: 12, border: `1px dashed ${C.borderMid}`, cursor: "pointer" }}>
-              <input type="file" accept="image/*" capture="environment" onChange={handleProgressPhoto} style={{ display: "none" }} />
+              <input type="file" accept="image/*" onChange={handleProgressPhoto} style={{ display: "none" }} />
               <span style={{ fontSize: 24 }}>📸</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Add today's progress photo</span>
             </label>
@@ -367,6 +367,7 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
   const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
   const toggleTask = (id) => setTasks(ts => ts.map(t => t.id === id ? { ...t, done: !t.done } : t));
   const addTask = () => { if (!newTask.trim()) return; setTasks(ts => [...ts, { id: Date.now(), text: newTask, done: false, carry: false }]); setNewTask(""); };
+  const deleteTask = (id) => setTasks(ts => ts.filter(t => t.id !== id));
   const toggleHabitDone = (id) => setHabitsDone(s => ({ ...s, [id]: !s[id] }));
 
   const weekAnchor = new Date(TODAY); weekAnchor.setDate(TODAY.getDate() + weekOffset * 7);
@@ -386,13 +387,30 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
 
   const startRec = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Audio recording isn't available here — this page needs to be loaded over HTTPS (or as the installed app) for microphone access to work.");
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream); mediaRef.current = mr; chunksRef.current = [];
-      mr.ondataavailable = e => chunksRef.current.push(e.data);
-      mr.onstop = () => { setAudioBlob(new Blob(chunksRef.current, { type: "audio/webm" })); setAudioDuration(audioTimer); stream.getTracks().forEach(t => t.stop()); };
+      // Safari/iOS doesn't support "audio/webm" (the old hardcoded default), which
+      // made recordings fail there. Pick whichever mime type this browser actually
+      // supports instead of assuming one.
+      const candidates = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+      const mimeType = (window.MediaRecorder && candidates.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t))) || "";
+      const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRef.current = mr; chunksRef.current = [];
+      mr.ondataavailable = e => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.onstop = () => { setAudioBlob(new Blob(chunksRef.current, { type: mr.mimeType || mimeType || "audio/webm" })); setAudioDuration(audioTimer); stream.getTracks().forEach(t => t.stop()); };
       mr.start(); setRecording(true); setAudioTimer(0);
       timerRef.current = setInterval(() => setAudioTimer(s => { if (audioMode === "impromptu" && s >= 60) { stopRec(); return s; } return s + 1; }), 1000);
-    } catch { alert("Microphone access needed"); }
+    } catch (err) {
+      console.error("Recording error:", err);
+      let msg = "Couldn't start recording.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") msg = "Microphone access was denied. Enable it for this app in your device/browser settings and try again.";
+      else if (err.name === "NotFoundError") msg = "No microphone found on this device.";
+      else if (err.name === "NotReadableError") msg = "Your microphone is already in use by another app.";
+      else if (err.message) msg = err.message;
+      alert(msg);
+    }
   };
   const stopRec = () => { if (mediaRef.current && recording) { mediaRef.current.stop(); setRecording(false); clearInterval(timerRef.current); } };
   useEffect(() => () => clearInterval(timerRef.current), []);
@@ -475,6 +493,7 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
             </div>
             <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: t.done ? C.textDim : C.text, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</span>
             {t.carry && !t.done && <span style={{ fontSize: 9, color: C.yellowDim, fontWeight: 700 }}>CARRY</span>}
+            <button onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer", flexShrink: 0, padding: "2px 4px", lineHeight: 1 }}>×</button>
           </div>
         ))}
         {tasks.length === 0 && <div style={{ fontSize: 12, color: C.textDim, padding: "8px 0" }}>No tasks yet — add one below.</div>}
@@ -536,8 +555,8 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
                     {settings.music && <button onClick={addMusicTag} style={{ background: "transparent", border: "none", color: C.text, fontSize: 13, fontWeight: 600, textAlign: "left", padding: "10px 10px", cursor: "pointer", borderRadius: 8, fontFamily: "inherit" }}>🎵 Add Song</button>}
                   </div>
                 )}
-                <input ref={journalPhotoInputRef} type="file" accept="image/*" capture="environment" onChange={handleJournalPhoto} style={{ display: "none" }} />
-                <input ref={journalVideoInputRef} type="file" accept="video/*" capture="environment" onChange={handleVideo} style={{ display: "none" }} />
+                <input ref={journalPhotoInputRef} type="file" accept="image/*" onChange={handleJournalPhoto} style={{ display: "none" }} />
+                <input ref={journalVideoInputRef} type="file" accept="video/*" onChange={handleVideo} style={{ display: "none" }} />
               </div>
             </div>
             <JournalFullEditor {...fullEditorProps} />
