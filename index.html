@@ -504,21 +504,31 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
   // Builds a snapshot of today (mood, journal text, which habits/tasks were
   // done, whether photo/audio were attached) and hands it up to the shared
   // journalEntries state so the Journal and You tabs see it immediately.
-  // Saving again the same day updates that day's entry rather than duplicating it.
+  // You can save more than one entry on the same day — each Save adds a new
+  // entry, and the journal-specific fields clear afterward so the next one
+  // starts fresh (tasks/habit checkmarks stay, since those apply to the whole
+  // day rather than a single entry).
   const saveEntry = () => {
-    const habitsSnapshot = habits.map(h => ({ id: h.id, done: !!habitsDone[h.id] }));
+    const isFirstEntryToday = !journalEntries.some(e => sameDay(e.date, TODAY));
+    // Names/icons are captured here rather than looked up live later, so the
+    // entry still shows the right habit even if it's later renamed or deleted.
+    const habitsSnapshot = habits.map(h => ({ id: h.id, name: h.name, icon: h.icon, done: !!habitsDone[h.id] }));
     const hit = habitsSnapshot.filter(h => h.done).length;
     addEntry({
-      id: Date.now(), date: new Date(TODAY), mood, text: journalText,
+      id: Date.now(), date: new Date(), mood, text: journalText,
       words: journalText.split(/\s+/).filter(Boolean).length,
       habitsSnapshot, habitsDone: hit, habitsTotal: habits.length,
       tasksSnapshot: tasks.map(t => ({ text: t.text, done: t.done })),
       hasPhoto: !!(progressPhoto || journalPhoto), hasAudio: !!audioBlob, audioDuration,
     });
-    if (habits.length) setHabits(hs => hs.map(h => habitsDone[h.id] ? { ...h, streak: h.streak + 1 } : { ...h, streak: 0 }));
+    // Habit streaks are a once-a-day thing, so only bump them the first time
+    // you save today — otherwise logging a second entry would double-count.
+    if (isFirstEntryToday && habits.length) setHabits(hs => hs.map(h => habitsDone[h.id] ? { ...h, streak: h.streak + 1 } : { ...h, streak: 0 }));
     const w = parseFloat(weightInput);
     if (!isNaN(w)) addWeight({ date: new Date(TODAY), weight: w });
+    setJournalText(""); setMood(5); setJournalPhoto(null); resetAudio(); removeVideo(); setMusicTag("");
     setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   const reflectProps = { mood, setMood, journalText, setJournalText, progressPhoto, setProgressPhoto, handleProgressPhoto, settings, onExpand: () => setExpanded(true), recording, audioBlob, audioTimer, audioDuration, audioMode, setAudioMode, topic, setTopic, rerollTopic, startRec, stopRec, resetAudio, weightInput, setWeightInput };
@@ -658,16 +668,22 @@ function HomeTab({ habits, setHabits, goals, setGoals, settings, goToDay, journa
 }
 
 // ─── JOURNAL TAB ────────────────────────────────────────────────────────────
-function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
-  const findEntryForDate = (d) => d ? (entries.find(e => sameDay(e.date, d)) || null) : null;
+function JournalTab({ entries, jump, clearJump, goHome, deleteEntry, updateEntry }) {
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [cameFromHome, setCameFromHome] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [pinnedDate, setPinnedDate] = useState(null); // set when a jumped-to day has more than one entry
   // The tab now stays mounted (so Home's draft state survives switching tabs),
   // so react to a fresh jump — tapping a day on Home — whenever it arrives,
   // rather than only once on mount, then consume it so it doesn't re-fire.
   useEffect(() => {
-    if (jump) { setSelectedEntry(findEntryForDate(jump.date)); setCameFromHome(!!jump.fromHome); clearJump(); }
+    if (jump) {
+      const dayEntries = entries.filter(e => sameDay(e.date, jump.date));
+      setCameFromHome(!!jump.fromHome);
+      if (dayEntries.length === 1) { setSelectedEntry(dayEntries[0]); setPinnedDate(null); }
+      else { setSelectedEntry(null); setPinnedDate(dayEntries.length > 1 ? jump.date : null); }
+      clearJump();
+    }
   }, [jump]);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("all");
@@ -675,8 +691,19 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
   const [typeFilter, setTypeFilter] = useState("all");
 
   const formatDate = (d) => { const diff = Math.floor((TODAY - d) / 86400000); if (diff === 0) return "Today"; if (diff === 1) return "Yesterday"; return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`; };
+  const formatTime = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const moodColor = (m) => m >= 8 ? C.yellow : m >= 6 ? C.textMid : C.red;
   const moodEmoji = (m) => m >= 8 ? "🔥" : m >= 6 ? "😐" : "💀";
+  const [editing, setEditing] = useState(false);
+  const [editMood, setEditMood] = useState(5);
+  const [editText, setEditText] = useState("");
+  const startEdit = (e) => { setEditMood(e.mood); setEditText(e.text); setEditing(true); };
+  const saveEdit = (e) => {
+    const fields = { mood: editMood, text: editText, words: editText.split(/\s+/).filter(Boolean).length };
+    updateEntry(e.id, fields);
+    setSelectedEntry({ ...e, ...fields });
+    setEditing(false);
+  };
 
   if (selectedEntry) {
     const e = selectedEntry;
@@ -684,14 +711,17 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
       <div className="view-in" style={{ padding: "0 0 28px" }}>
         <div style={{ padding: "16px 16px 0" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <button onClick={() => { if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>← Back</button>
-            <button onClick={() => setConfirmDelete(true)} style={{ background: "transparent", border: "none", color: C.red, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>🗑 Delete</button>
+            <button onClick={() => { setEditing(false); if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>← Back</button>
+            <div style={{ display: "flex", gap: 16 }}>
+              {!editing && <button onClick={() => startEdit(e)} style={{ background: "transparent", border: "none", color: C.textMid, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>✎ Edit</button>}
+              <button onClick={() => setConfirmDelete(true)} style={{ background: "transparent", border: "none", color: C.red, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>🗑 Delete</button>
+            </div>
           </div>
           {confirmDelete && (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 24 }} onClick={() => setConfirmDelete(false)}>
               <div onClick={ev => ev.stopPropagation()} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20, maxWidth: 320, width: "100%" }}>
                 <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>Delete this entry?</div>
-                <div style={{ fontSize: 13, color: C.textMid, lineHeight: 1.5, marginBottom: 18 }}>This can't be undone. Your journal entry for {formatDate(e.date)} will be permanently removed.</div>
+                <div style={{ fontSize: 13, color: C.textMid, lineHeight: 1.5, marginBottom: 18 }}>This can't be undone. Your journal entry from {formatDate(e.date)} at {formatTime(e.date)} will be permanently removed.</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={() => setConfirmDelete(false)} style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.borderMid}`, color: C.text, fontWeight: 700, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
                   <button onClick={() => { deleteEntry(e.id); setConfirmDelete(false); if (cameFromHome) { goHome(); } else { setSelectedEntry(null); } setCameFromHome(false); }} style={{ flex: 1, background: C.red, border: "none", color: "#fff", fontWeight: 700, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
@@ -701,13 +731,38 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
           )}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
-              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.1em" }}>{formatDate(e.date).toUpperCase()}</div>
-              <div style={{ fontSize: 26, fontWeight: 900, marginTop: 4 }}>{moodEmoji(e.mood)} {e.mood}/10</div>
+              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.1em" }}>{formatDate(e.date).toUpperCase()} · {formatTime(e.date)}</div>
+              {editing ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+                  <span style={{ fontSize: 20 }}>{moodEmoji(editMood)}</span>
+                  <input type="range" min="1" max="10" value={editMood} onChange={ev => setEditMood(+ev.target.value)} style={{ width: 120 }} />
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>{editMood}/10</span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 4 }}>{moodEmoji(e.mood)} {e.mood}/10</div>
+              )}
             </div>
-            {e.habitsTotal > 0 && <Chip color={e.habitsDone === e.habitsTotal ? C.green : C.yellow} size={10}>{e.habitsDone}/{e.habitsTotal} habits</Chip>}
+            {!editing && e.habitsSnapshot && e.habitsSnapshot.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, justifyContent: "flex-end", maxWidth: 160 }}>
+                {e.habitsSnapshot.map((h, i) => (
+                  <span key={i} style={{ fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 999, whiteSpace: "nowrap", background: h.done ? C.green + "22" : C.red + "18", border: `1px solid ${h.done ? C.green : C.red}55`, color: h.done ? C.green : C.red }}>
+                    {h.icon || "•"} {h.name || "Habit"}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
+          {editing && (
+            <div style={{ marginTop: 14 }}>
+              <textarea value={editText} onChange={ev => setEditText(ev.target.value)} rows={6} style={{ width: "100%", background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, color: C.text, fontSize: 14, lineHeight: 1.6, fontFamily: "inherit", resize: "vertical" }} />
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button onClick={() => setEditing(false)} style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.borderMid}`, color: C.text, fontWeight: 700, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={() => saveEdit(e)} style={{ flex: 1, background: C.yellow, border: "none", color: "#000", fontWeight: 800, fontSize: 13, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>Save Changes</button>
+              </div>
+            </div>
+          )}
         </div>
-        {(() => {
+        {editing ? null : (() => {
           const dayTasks = e.tasksSnapshot;
           if (!dayTasks || !dayTasks.length) return null;
           const hitCount = dayTasks.filter(t => t.done).length;
@@ -730,9 +785,9 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
             </div>
           );
         })()}
-        {e.hasPhoto && <div style={{ margin: "16px 16px 0", height: 180, background: C.bgCard, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}><div style={{ fontSize: 40 }}>📸</div><div style={{ fontSize: 12, color: C.textDim }}>Progress photo · {formatDate(e.date)}</div></div>}
-        {e.hasAudio && <div style={{ margin: "16px 16px 0", display: "flex", alignItems: "center", gap: 12, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}><div style={{ width: 36, height: 36, borderRadius: "50%", background: C.purple + "22", border: `1px solid ${C.purple}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🎙</div><div><div style={{ fontSize: 12, fontWeight: 700 }}>Voice note</div><div style={{ fontSize: 11, color: C.textDim }}>{fmtS(e.audioDuration)}</div></div></div>}
-        <div style={{ padding: "16px 16px 0" }}><div style={{ fontSize: 15, color: C.text, lineHeight: 1.75 }}>{e.text}</div><div style={{ fontSize: 11, color: C.textDim, marginTop: 8 }}>{e.words} words</div></div>
+        {!editing && e.hasPhoto && <div style={{ margin: "16px 16px 0", height: 180, background: C.bgCard, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}><div style={{ fontSize: 40 }}>📸</div><div style={{ fontSize: 12, color: C.textDim }}>Progress photo · {formatDate(e.date)}</div></div>}
+        {!editing && e.hasAudio && <div style={{ margin: "16px 16px 0", display: "flex", alignItems: "center", gap: 12, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}><div style={{ width: 36, height: 36, borderRadius: "50%", background: C.purple + "22", border: `1px solid ${C.purple}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🎙</div><div><div style={{ fontSize: 12, fontWeight: 700 }}>Voice note</div><div style={{ fontSize: 11, color: C.textDim }}>{fmtS(e.audioDuration)}</div></div></div>}
+        {!editing && <div style={{ padding: "16px 16px 0" }}><div style={{ fontSize: 15, color: C.text, lineHeight: 1.75 }}>{e.text}</div><div style={{ fontSize: 11, color: C.textDim, marginTop: 8 }}>{e.words} words</div></div>}
       </div>
     );
   }
@@ -746,7 +801,9 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
   };
   const inMood = (m) => moodFilter === "all" || (moodFilter === "high" && m >= 8) || (moodFilter === "mid" && m >= 5 && m < 8) || (moodFilter === "low" && m < 5);
   const inType = (e) => typeFilter === "all" || (typeFilter === "photo" && e.hasPhoto) || (typeFilter === "audio" && e.hasAudio);
-  const filtered = entries.filter(e => inRange(e.date) && inMood(e.mood) && inType(e) && (!search.trim() || e.text.toLowerCase().includes(search.toLowerCase())));
+  const filtered = pinnedDate
+    ? entries.filter(e => sameDay(e.date, pinnedDate)).sort((a, b) => a.date - b.date)
+    : entries.filter(e => inRange(e.date) && inMood(e.mood) && inType(e) && (!search.trim() || e.text.toLowerCase().includes(search.toLowerCase())));
 
   const avgMood = filtered.length ? (filtered.reduce((a, e) => a + e.mood, 0) / filtered.length).toFixed(1) : "—";
   const totalWords = filtered.reduce((a, e) => a + e.words, 0);
@@ -758,36 +815,47 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
         <div style={{ fontSize: 34, fontWeight: 900, lineHeight: 1.1, marginTop: 4 }}>Your <span style={{ color: C.yellow }}>Entries.</span></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+      {pinnedDate && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>{filtered.length} entries · {formatDate(pinnedDate)}</span>
+          <button onClick={() => setPinnedDate(null)} style={{ background: "transparent", border: "none", color: C.yellow, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Show all</button>
+        </div>
+      )}
+
+      {!pinnedDate && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
         {[{ v: `🔥${currentStreak(entries)}`, l: "Streak" }, { v: filtered.length, l: "Entries" }, { v: avgMood, l: "Avg mood" }, { v: totalWords.toLocaleString(), l: "Words" }].map((s, i) => (
           <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 6px", textAlign: "center" }}>
             <div style={{ fontSize: 18, fontWeight: 900, color: C.yellow }}>{s.v}</div>
             <div style={{ fontSize: 9, color: C.textDim, marginTop: 4, fontWeight: 600 }}>{s.l}</div>
           </div>
         ))}
-      </div>
+      </div>}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
-        <span style={{ fontSize: 14, color: C.textDim }}>🔍</span>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search entries..." style={{ flex: 1, background: "transparent", border: "none", color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
-        {search && <button onClick={() => setSearch("")} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer" }}>×</button>}
-      </div>
+      {!pinnedDate && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+            <span style={{ fontSize: 14, color: C.textDim }}>🔍</span>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search entries..." style={{ flex: 1, background: "transparent", border: "none", color: C.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+            {search && <button onClick={() => setSearch("")} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer" }}>×</button>}
+          </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
-        {[["all", "All time"], ["7d", "Last 7 days"], ["30d", "Last 30 days"], ["month", "This month"]].map(([v, l]) => (
-          <FilterChip key={v} active={dateFilter === v} onClick={() => setDateFilter(v)}>{l}</FilterChip>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
-        {[["all", "Any mood"], ["high", "🔥 High"], ["mid", "😐 Mid"], ["low", "💀 Low"]].map(([v, l]) => (
-          <FilterChip key={v} active={moodFilter === v} onClick={() => setMoodFilter(v)}>{l}</FilterChip>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
-        {[["all", "All entries"], ["photo", "📸 Has photo"], ["audio", "🎙 Has audio"]].map(([v, l]) => (
-          <FilterChip key={v} active={typeFilter === v} onClick={() => setTypeFilter(v)}>{l}</FilterChip>
-        ))}
-      </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
+            {[["all", "All time"], ["7d", "Last 7 days"], ["30d", "Last 30 days"], ["month", "This month"]].map(([v, l]) => (
+              <FilterChip key={v} active={dateFilter === v} onClick={() => setDateFilter(v)}>{l}</FilterChip>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
+            {[["all", "Any mood"], ["high", "🔥 High"], ["mid", "😐 Mid"], ["low", "💀 Low"]].map(([v, l]) => (
+              <FilterChip key={v} active={moodFilter === v} onClick={() => setMoodFilter(v)}>{l}</FilterChip>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+            {[["all", "All entries"], ["photo", "📸 Has photo"], ["audio", "🎙 Has audio"]].map(([v, l]) => (
+              <FilterChip key={v} active={typeFilter === v} onClick={() => setTypeFilter(v)}>{l}</FilterChip>
+            ))}
+          </div>
+        </>
+      )}
 
       {filtered.length === 0 && <div style={{ textAlign: "center", padding: "40px 0", color: C.textDim, fontSize: 13 }}>{entries.length === 0 ? "No entries yet — save your first one from the Home tab." : "No entries match your filters."}</div>}
 
@@ -795,7 +863,7 @@ function JournalTab({ entries, jump, clearJump, goHome, deleteEntry }) {
         <div key={e.id} className="row-tap" onClick={() => { setSelectedEntry(e); setCameFromHome(false); }} style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 8, cursor: "pointer" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
             <div>
-              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.08em" }}>{formatDate(e.date).toUpperCase()}</div>
+              <div style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: "0.08em" }}>{formatDate(e.date).toUpperCase()} · {formatTime(e.date)}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
                 <span style={{ fontSize: 18 }}>{moodEmoji(e.mood)}</span>
                 <span style={{ fontSize: 16, fontWeight: 800, color: moodColor(e.mood) }}>{e.mood}/10</span>
@@ -1203,11 +1271,14 @@ function App() {
 
   const goToDay = (d) => { setJump({ date: d, fromHome: true }); setTab("journal"); };
 
-  // Upsert-by-day: saving twice in one day updates that day's record instead
-  // of creating a duplicate entry/weigh-in.
-  const addEntry = (entry) => setJournalEntries(es => { const i = es.findIndex(e => sameDay(e.date, entry.date)); if (i >= 0) { const c = [...es]; c[i] = entry; return c; } return [...es, entry]; });
-  const addWeight = (w) => setWeightHistory(ws => { const i = ws.findIndex(x => sameDay(x.date, w.date)); if (i >= 0) { const c = [...ws]; c[i] = w; return c; } return [...ws, w]; });
+  // Journal entries: always append, so you can log more than one entry on the
+  // same day instead of the second save overwriting the first.
+  const addEntry = (entry) => setJournalEntries(es => [...es, entry]);
+  const updateEntry = (id, fields) => setJournalEntries(es => es.map(e => e.id === id ? { ...e, ...fields } : e));
   const deleteEntry = (id) => setJournalEntries(es => es.filter(e => e.id !== id));
+  // Weigh-ins stay upsert-by-day: saving twice in one day updates that day's
+  // weight instead of creating a duplicate data point.
+  const addWeight = (w) => setWeightHistory(ws => { const i = ws.findIndex(x => sameDay(x.date, w.date)); if (i >= 0) { const c = [...ws]; c[i] = w; return c; } return [...ws, w]; });
 
   const TABS = [
     { key: "home", icon: "⚡", label: "Journal" },
@@ -1225,7 +1296,7 @@ function App() {
           <HomeTab habits={habits} setHabits={setHabits} goals={goals} setGoals={setGoals} settings={settings} goToDay={goToDay} journalEntries={journalEntries} addEntry={addEntry} addWeight={addWeight} />
         </div>
         <div style={{ display: tab === "journal" ? "block" : "none" }}>
-          <JournalTab entries={journalEntries} jump={jump} clearJump={() => setJump(null)} goHome={() => setTab("home")} deleteEntry={deleteEntry} />
+          <JournalTab entries={journalEntries} jump={jump} clearJump={() => setJump(null)} goHome={() => setTab("home")} deleteEntry={deleteEntry} updateEntry={updateEntry} />
         </div>
         <div style={{ display: tab === "you" ? "block" : "none" }}>
           <YouTab goals={goals} setGoals={setGoals} habits={habits} setHabits={setHabits} journalEntries={journalEntries} weightHistory={weightHistory} identity={identity} setIdentity={setIdentity} onOpenSettings={() => setShowSettings(true)} />
